@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Shorts System</title>
+    <link rel="stylesheet" href="/static/dashboard.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Local automation console</p>
+          <h1>AI Shorts System</h1>
+        </div>
+        <div class="actions">
+          <button id="processBtn" type="button">Run pipeline</button>
+          <button id="analyticsBtn" type="button" class="secondary">Refresh analytics</button>
+        </div>
+      </header>
+
+      <section class="metrics" aria-label="System metrics">
+        <article><span>{{ counts.channels }}</span><p>Channels</p></article>
+        <article><span>{{ counts.videos }}</span><p>Videos</p></article>
+        <article><span>{{ counts.clips }}</span><p>Clips</p></article>
+        <article><span>{{ counts.uploads }}</span><p>Uploads</p></article>
+      </section>
+
+      <section class="panel add-channel">
+        <form id="channelForm">
+          <input name="url" type="text" placeholder="YouTube channel URL or UC channel ID" required />
+          <input name="name" type="text" placeholder="Label" />
+          <button type="submit">Add channel</button>
+        </form>
+        <p id="statusLine" role="status"></p>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Processed Videos</h2>
+          </div>
+          <div class="table">
+            {% for video in videos %}
+            <div class="row">
+              <div>
+                <strong>{{ video.title }}</strong>
+                <small>{{ video.youtube_video_id }}</small>
+              </div>
+              <span class="pill">{{ video.status }}</span>
+            </div>
+            {% else %}
+            <div class="empty">No videos yet</div>
+            {% endfor %}
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Generated Clips</h2>
+          </div>
+          <div class="table">
+            {% for clip in clips %}
+            <div class="row">
+              <div>
+                <strong>{{ clip.title or "Untitled clip" }}</strong>
+                <small>{{ "%.1f"|format(clip.start_time) }}s - {{ "%.1f"|format(clip.end_time) }}s</small>
+              </div>
+              <span class="score">{{ "%.2f"|format(clip.viral_score) }}</span>
+            </div>
+            {% else %}
+            <div class="empty">No clips yet</div>
+            {% endfor %}
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Upload Queue</h2>
+          </div>
+          <div class="table">
+            {% for upload in uploads %}
+            <div class="row">
+              <div>
+                <strong>Clip #{{ upload.clip_id }}</strong>
+                <small>{{ upload.youtube_video_id or "pending" }}</small>
+              </div>
+              <span class="pill">{{ upload.status }}</span>
+            </div>
+            {% else %}
+            <div class="empty">Queue is empty</div>
+            {% endfor %}
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Analytics</h2>
+          </div>
+          <div class="table">
+            {% for item in analytics %}
+            <div class="row">
+              <div>
+                <strong>Clip #{{ item.clip_id }}</strong>
+                <small>{{ item.captured_at }}</small>
+              </div>
+              <span class="score">{{ item.views }} views</span>
+            </div>
+            {% else %}
+            <div class="empty">No analytics yet</div>
+            {% endfor %}
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <script>
+      const statusLine = document.querySelector("#statusLine");
+
+      document.querySelector("#channelForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        const response = await fetch("/api/channels", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: form.get("url"), name: form.get("name") || null }),
+        });
+        statusLine.textContent = response.ok ? "Channel added" : "Could not add channel";
+        if (response.ok) window.setTimeout(() => window.location.reload(), 600);
+      });
+
+      document.querySelector("#processBtn").addEventListener("click", async () => {
+        const response = await fetch("/api/process", { method: "POST" });
+        statusLine.textContent = response.ok ? "Pipeline started" : "Pipeline could not start";
+      });
+
+      document.querySelector("#analyticsBtn").addEventListener("click", async () => {
+        const response = await fetch("/api/analytics/refresh", { method: "POST" });
+        statusLine.textContent = response.ok ? "Analytics refresh started" : "Analytics refresh failed";
+      });
+    </script>
+  </body>
+</html>
+
