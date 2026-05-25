@@ -154,6 +154,24 @@ cython_debug/
 # Windows-specific
 Thumbs.db
 desktop.ini
+$RECYCLE.BIN/
+
+# macOS-specific
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Frontend dependencies and build
+node_modules/
+dist/
+dist-ssr/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
 
 # Project-specific
 data/audio/*
@@ -167,8 +185,11 @@ data/transcripts/*
 data/videos/*
 !data/videos/.gitkeep
 database/*.db
+database/*.sqlite
 models/*.bin
+models/*.pth
+models/*.onnx
 temp/*
 !temp/.gitkeep
+temp/ffmpeg-bin/*
 !temp/ffmpeg-bin/.gitkeep
-temp/ffmpeg-bin/ffmpeg.exe

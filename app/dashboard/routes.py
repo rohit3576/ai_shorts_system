@@ -1,80 +1,181 @@
-"""Server-rendered dashboard routes."""
+"""Dashboard HTML and JSON routes."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
-from database.models import AnalyticsSnapshot, Channel, Clip, Upload, Video
+from app.dashboard import services
 from database.session import get_session
 
 router = APIRouter(tags=["dashboard"])
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 
+async def _bootstrap(session: AsyncSession) -> dict[str, Any]:
+    overview = await services.overview_payload(session)
+    return {
+        "overview": overview,
+        "clips": await services.clips_payload(session, limit=24),
+        "analytics": await services.analytics_payload(session),
+        "channels": await services.channels_payload(session),
+        "uploads": await services.uploads_payload(session),
+        "logs": await services.logs_payload(session),
+        "settings": services.settings_payload(),
+    }
+
+
+async def _render_app(
+    request: Request,
+    session: AsyncSession,
+    *,
+    page: str,
+    template_name: str,
+) -> HTMLResponse:
+    bootstrap = await _bootstrap(session)
+    overview = bootstrap["overview"]
+    context = {
+        "request": request,
+        "page": page,
+        "bootstrap": bootstrap,
+        "stats": overview["stats"],
+        "clips": overview["clips"],
+        "videos": overview["videos"],
+    }
+    return templates.TemplateResponse(request, template_name, context)
+
+
 @router.get("/", response_class=HTMLResponse)
+@router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(
     request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
-    """Render the local operations dashboard."""
+    """Render the overview dashboard."""
 
-    counts = {}
-    for key, model in {
-        "channels": Channel,
-        "videos": Video,
-        "clips": Clip,
-        "uploads": Upload,
-    }.items():
-        counts[key] = await session.scalar(select(func.count(model.id)))
+    return await _render_app(request, session, page="overview", template_name="dashboard.html")
 
-    videos = list(
-        (
-            await session.execute(select(Video).order_by(desc(Video.created_at)).limit(10))
-        )
-        .scalars()
-        .all()
-    )
-    clips = list(
-        (
-            await session.execute(select(Clip).order_by(desc(Clip.viral_score)).limit(10))
-        )
-        .scalars()
-        .all()
-    )
-    uploads = list(
-        (
-            await session.execute(select(Upload).order_by(desc(Upload.created_at)).limit(10))
-        )
-        .scalars()
-        .all()
-    )
-    analytics = list(
-        (
-            await session.execute(
-                select(AnalyticsSnapshot).order_by(desc(AnalyticsSnapshot.captured_at)).limit(8)
-            )
-        )
-        .scalars()
-        .all()
-    )
 
-    return templates.TemplateResponse(
-        "index.html",
-        {
-            "request": request,
-            "settings": settings,
-            "counts": counts,
-            "videos": videos,
-            "clips": clips,
-            "uploads": uploads,
-            "analytics": analytics,
-        },
-    )
+@router.get("/pipeline", response_class=HTMLResponse)
+async def pipeline_page(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> HTMLResponse:
+    """Render the pipeline monitor."""
 
+    return await _render_app(request, session, page="pipeline", template_name="pipeline.html")
+
+
+@router.get("/clips", response_class=HTMLResponse)
+async def clips_page(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> HTMLResponse:
+    """Render the Shorts gallery."""
+
+    return await _render_app(request, session, page="clips", template_name="clips.html")
+
+
+@router.get("/analytics", response_class=HTMLResponse)
+async def analytics_page(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> HTMLResponse:
+    """Render analytics."""
+
+    return await _render_app(request, session, page="analytics", template_name="analytics.html")
+
+
+@router.get("/channels", response_class=HTMLResponse)
+async def channels_page(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> HTMLResponse:
+    """Render channel management."""
+
+    return await _render_app(request, session, page="channels", template_name="channels.html")
+
+
+@router.get("/settings", response_class=HTMLResponse)
+async def settings_page(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> HTMLResponse:
+    """Render settings."""
+
+    return await _render_app(request, session, page="settings", template_name="settings.html")
+
+
+@router.get("/logs", response_class=HTMLResponse)
+async def logs_page(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> HTMLResponse:
+    """Render logs."""
+
+    return await _render_app(request, session, page="logs", template_name="logs.html")
+
+
+@router.get("/dashboard/api/overview")
+async def dashboard_overview(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    return await services.overview_payload(session)
+
+
+@router.get("/dashboard/api/clips")
+async def dashboard_clips(
+    session: AsyncSession = Depends(get_session),
+    limit: int = Query(24, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    status: str | None = Query(default=None),
+    sort: str = Query("score"),
+) -> dict[str, Any]:
+    return await services.clips_payload(session, limit=limit, offset=offset, status=status, sort=sort)
+
+
+@router.get("/dashboard/api/analytics")
+async def dashboard_analytics(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    return await services.analytics_payload(session)
+
+
+@router.get("/dashboard/api/channels")
+async def dashboard_channels(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    return await services.channels_payload(session)
+
+
+@router.get("/dashboard/api/uploads")
+async def dashboard_uploads(
+    session: AsyncSession = Depends(get_session),
+    status: str | None = Query(default=None),
+    limit: int = Query(50, ge=1, le=100),
+) -> dict[str, Any]:
+    return await services.uploads_payload(session, status=status, limit=limit)
+
+
+@router.get("/dashboard/api/logs")
+async def dashboard_logs(
+    session: AsyncSession = Depends(get_session),
+    limit: int = Query(80, ge=1, le=200),
+    level: str | None = Query(default=None),
+) -> dict[str, Any]:
+    return await services.logs_payload(session, limit=limit, level=level)
+
+
+@router.get("/dashboard/api/settings")
+async def dashboard_settings() -> dict[str, Any]:
+    return services.settings_payload()
+
+
+@router.get("/favicon.ico")
+async def favicon() -> Response:
+    """Handle browser favicon requests without a 500 or noisy 404."""
+
+    icon_path = Path(__file__).parent / "static" / "images" / "favicon.svg"
+    if icon_path.exists():
+        return FileResponse(icon_path, media_type="image/svg+xml")
+    return Response(status_code=204)

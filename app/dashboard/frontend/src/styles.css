@@ -1,0 +1,100 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+html {
+  background: #07080d;
+  overflow-x: hidden;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  overflow-x: hidden;
+  background:
+    radial-gradient(circle at 18% 2%, rgba(34, 211, 238, 0.16), transparent 30rem),
+    radial-gradient(circle at 72% 8%, rgba(167, 139, 250, 0.18), transparent 34rem),
+    linear-gradient(180deg, #07080d 0%, #0a0d14 48%, #07080d 100%);
+  color: #f8fafc;
+}
+
+#dashboard-root {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+canvas,
+video {
+  max-width: 100%;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+@layer components {
+  .glass-panel {
+    @apply border border-white/10 bg-white/[0.055] backdrop-blur-xl shadow-glow;
+  }
+
+  .soft-card {
+    @apply min-w-0 rounded-2xl border border-white/10 bg-white/[0.045] transition duration-300;
+  }
+
+  .soft-card:hover {
+    @apply border-cyan-300/30 bg-white/[0.07];
+  }
+
+  .nav-link {
+    @apply flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-slate-400 transition duration-200;
+  }
+
+  .nav-link:hover {
+    @apply bg-white/[0.07] text-white;
+  }
+
+  .nav-link.active {
+    @apply bg-cyan-300/10 text-cyan-200 ring-1 ring-cyan-300/20;
+  }
+
+  .control-button {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-4 py-2.5 text-sm font-semibold text-white transition duration-200;
+  }
+
+  .control-button:hover {
+    @apply border-cyan-300/30 bg-cyan-300/10 text-cyan-100;
+  }
+
+  .primary-button {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-300 px-4 py-2.5 text-sm font-extrabold text-slate-950 shadow-lg shadow-cyan-500/20 transition duration-200;
+  }
+
+  .primary-button:hover {
+    @apply -translate-y-0.5 bg-cyan-200;
+  }
+}
+
+.scanline {
+  background-image: linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px);
+  background-size: 100% 6px;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+}

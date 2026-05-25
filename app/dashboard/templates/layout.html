@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#07080d" />
+    <title>{% block title %}AI Shorts Command Center{% endblock %}</title>
+    <link rel="icon" href="/favicon.ico" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/css/dashboard.css" />
+    {% block head %}{% endblock %}
+  </head>
+  <body>
+    {% block body %}
+    <div id="dashboard-root"></div>
+    {% endblock %}
+    <script>
+      window.DASHBOARD_PAGE = {{ page | tojson }};
+      window.DASHBOARD_BOOTSTRAP = {{ bootstrap | tojson }};
+    </script>
+    <script type="module" src="/static/js/dashboard.js"></script>
+  </body>
+</html>
+
