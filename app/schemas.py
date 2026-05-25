@@ -28,18 +28,35 @@ class AddSourceRequest(BaseModel):
     channel_id: int | None = None
 
 
+class RightsReviewRequest(BaseModel):
+    """Structured rights and originality review required before upload."""
+
+    owned_content: bool = False
+    licensed_content: bool = False
+    commentary_added: bool = False
+    narration_added: bool = False
+    transformative_edit: bool = False
+    approved_for_upload: bool = False
+    policy_notes: str | None = None
+    reviewer: str | None = None
+
+
 class ScheduleUploadRequest(BaseModel):
     """Request body for upload scheduling."""
 
     scheduled_for: datetime | None = None
+    rights_review: RightsReviewRequest | None = None
 
 
 class ReviewClipRequest(BaseModel):
     """Human review action for a generated Short."""
 
     reason: str | None = None
+    labels: list[str] = Field(default_factory=list)
+    reviewer: str | None = None
     schedule_upload: bool = False
     scheduled_for: datetime | None = None
+    rights_review: RightsReviewRequest | None = None
 
 
 class RegenerateHookRequest(BaseModel):
@@ -132,6 +149,18 @@ class AnalyticsSnapshotOut(BaseModel):
     comments: int
     ctr: float | None
     retention_avg: float | None
+    average_view_duration_seconds: float | None = None
+    average_view_percentage: float | None = None
+    watch_time_minutes: float | None = None
+    watch_percentage: float | None = None
+    subscriber_gain: int | None = None
+    shares: int | None = None
+    impressions: int | None = None
+    rewatch_rate: float | None = None
+    snapshot_window_hours: int | None = None
+    upload_age_hours: float | None = None
+    metric_source: str = "REAL"
+    capture_status: str = "captured"
     captured_at: datetime
 
 

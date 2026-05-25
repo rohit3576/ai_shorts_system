@@ -1,0 +1,3 @@
+id,clip_id,event_type,outcome_score,metric_source,has_real_analytics,views,retention_avg,ctr,hook_type,duration,labels
+2,1,clip_outcome,0.0,PREDICTED,False,0,,,,18.8,
+1,1,imported_clip,0.0,PREDICTED,,,,,,18.8,

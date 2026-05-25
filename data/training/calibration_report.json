@@ -1,0 +1,12 @@
+{
+  "sample_count": 0,
+  "retention_mae": null,
+  "virality_mae": null,
+  "hook_mae": null,
+  "confidence_interval_95": {
+    "low": null,
+    "high": null
+  },
+  "status": "No real analytics collected yet.",
+  "rows": []
+}

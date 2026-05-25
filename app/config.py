@@ -70,7 +70,29 @@ class Settings(BaseSettings):
     youtube_privacy_status: str = "private"
 
     analytics_refresh_hours: int = 6
+    analytics_snapshot_hours: str = "1,6,24,72,168"
+    analytics_min_refresh_minutes: int = 30
     dashboard_page_size: int = 50
+
+    job_worker_interval_minutes: int = 1
+    job_max_attempts: int = 3
+
+    cleanup_enabled: bool = True
+    storage_cleanup_mode: str = Field(
+        "mark_only",
+        description="mark_only, archive, or delete",
+    )
+    source_video_retention_days: int = 30
+    audio_retention_days: int = 14
+    transcript_retention_days: int = 180
+    preview_retention_days: int = 14
+    rendered_clip_retention_days: int = 365
+    temp_retention_days: int = 3
+
+    upload_min_originality_score: float = 60.0
+    upload_min_hook_quality: float = 55.0
+    upload_min_pacing_score: float = 50.0
+    upload_max_dead_zone_risk: float = 65.0
 
     request_timeout_seconds: int = 30
     retry_attempts: int = 3
@@ -111,6 +133,19 @@ class Settings(BaseSettings):
     def training_data_dir(self) -> Path:
         return self.resolve_path(self.training_dir)
 
+    @property
+    def archive_dir(self) -> Path:
+        return self.resolve_path(self.data_dir) / "archive"
+
+    @property
+    def analytics_windows(self) -> list[int]:
+        windows: list[int] = []
+        for raw in self.analytics_snapshot_hours.split(","):
+            raw = raw.strip()
+            if raw.isdigit():
+                windows.append(int(raw))
+        return windows or [1, 6, 24, 72, 168]
+
     def ensure_directories(self) -> None:
         """Create all local runtime directories if they do not exist."""
 
@@ -122,6 +157,7 @@ class Settings(BaseSettings):
             self.clips_dir,
             self.thumbnails_dir,
             self.training_data_dir,
+            self.archive_dir,
             self.resolve_path(self.temp_dir),
             self.resolve_path(self.models_dir),
             self.project_root / "database",

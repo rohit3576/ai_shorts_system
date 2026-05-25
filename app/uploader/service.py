@@ -11,6 +11,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.intelligence.quality_gate import QualityGateService, UploadGateError
 from app.uploader.auth import YouTubeAuth
 from database.models import Clip, Upload
 from database.session import AsyncSessionLocal
@@ -23,6 +24,7 @@ class YouTubeUploader:
 
     def __init__(self, auth: YouTubeAuth | None = None) -> None:
         self.auth = auth or YouTubeAuth()
+        self.quality_gate = QualityGateService()
 
     async def enqueue_upload(
         self,
@@ -30,8 +32,13 @@ class YouTubeUploader:
         *,
         clip_id: int,
         scheduled_for: datetime | None = None,
+        rights_review: dict | None = None,
     ) -> Upload:
         """Create an upload queue row for a clip."""
+
+        clip = await session.get(Clip, clip_id)
+        if not clip:
+            raise ValueError(f"Clip {clip_id} not found")
 
         existing = await session.scalar(
             select(Upload).where(Upload.clip_id == clip_id, Upload.status.in_(["queued", "uploading"]))
@@ -39,14 +46,33 @@ class YouTubeUploader:
         if existing:
             return existing
 
+        try:
+            gate = await self.quality_gate.validate_for_upload(
+                session,
+                clip=clip,
+                rights_review_payload=rights_review,
+            )
+        except UploadGateError:
+            clip.status = "upload_blocked"
+            metadata = dict(clip.metadata_json or {})
+            metadata["upload_gate_status"] = "failed"
+            clip.metadata_json = metadata
+            await session.flush()
+            raise
+
         upload = Upload(
             clip_id=clip_id,
             status="queued",
             privacy_status=settings.youtube_privacy_status,
             scheduled_for=scheduled_for,
+            quality_gate_status="passed",
+            metadata_json={"quality_gate_id": gate.id},
         )
         session.add(upload)
         await session.flush()
+        gate.upload_id = upload.id
+        if gate.metadata_json and gate.metadata_json.get("rights_review_id"):
+            upload.rights_review_id = int(gate.metadata_json["rights_review_id"])
         logger.info("Queued clip %s for YouTube upload", clip_id)
         return upload
 
@@ -66,6 +92,16 @@ class YouTubeUploader:
         clip = await session.get(Clip, upload.clip_id)
         if not clip or not clip.clip_path:
             raise ValueError(f"Upload {upload_id} has no rendered clip")
+
+        try:
+            gate = await self.quality_gate.validate_for_upload(session, clip=clip, upload_id=upload.id)
+            upload.quality_gate_status = "passed" if gate.passed else "failed"
+        except UploadGateError as exc:
+            upload.status = "blocked"
+            upload.quality_gate_status = "failed"
+            upload.error = str(exc)
+            await session.flush()
+            raise
 
         if not settings.youtube_upload_enabled:
             upload.status = "dry_run"
@@ -151,4 +187,3 @@ class YouTubeUploader:
         while response is None:
             _status, response = request.next_chunk()
         return response["id"]
-

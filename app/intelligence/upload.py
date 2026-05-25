@@ -57,10 +57,10 @@ class UploadIntelligenceService:
             "recommended_today": [self._serialize(item) for item in ordered[:8]],
             "suggested_times": await self.suggested_times(session),
             "schedule_patterns": [
-                {"label": "Morning test", "time": "08:30", "score": 72},
-                {"label": "Lunch scroll", "time": "12:30", "score": 81},
-                {"label": "Evening prime", "time": "18:30", "score": 88},
-                {"label": "Late-night binge", "time": "22:00", "score": 79},
+                {"label": "Morning test", "time": "08:30", "score": 72, "metric_source": "PREDICTED"},
+                {"label": "Lunch scroll", "time": "12:30", "score": 81, "metric_source": "PREDICTED"},
+                {"label": "Evening prime", "time": "18:30", "score": 88, "metric_source": "PREDICTED"},
+                {"label": "Late-night binge", "time": "22:00", "score": 79, "metric_source": "PREDICTED"},
             ],
             "auto_upload_ready": [self._serialize(item) for item in ordered if item.confidence_score >= 0.84][:5],
         }
@@ -70,14 +70,22 @@ class UploadIntelligenceService:
         profiles = list(result.scalars().all())
         if not profiles:
             return [
-                {"channel": "Network default", "time": "12:30", "score": 81},
-                {"channel": "Network default", "time": "18:30", "score": 88},
-                {"channel": "Network default", "time": "22:00", "score": 79},
+                {"channel": "Network default", "time": "12:30", "score": 81, "metric_source": "PREDICTED"},
+                {"channel": "Network default", "time": "18:30", "score": 88, "metric_source": "PREDICTED"},
+                {"channel": "Network default", "time": "22:00", "score": 79, "metric_source": "PREDICTED"},
             ]
         rows: list[dict[str, Any]] = []
         for profile in profiles:
             for index, slot in enumerate((profile.schedule_json or {}).get("times", ["12:30", "18:30"])):
-                rows.append({"channel_id": profile.channel_id, "niche": profile.niche_type, "time": slot, "score": 88 - (index * 5)})
+                rows.append(
+                    {
+                        "channel_id": profile.channel_id,
+                        "niche": profile.niche_type,
+                        "time": slot,
+                        "score": 88 - (index * 5),
+                        "metric_source": "PREDICTED",
+                    }
+                )
         return rows
 
     def next_slot(self, profile: ChannelProfile | None) -> datetime:
@@ -120,4 +128,5 @@ class UploadIntelligenceService:
             "hashtags": item.hashtags or [],
             "thumbnail_prompt": item.thumbnail_prompt,
             "status": item.status,
+            "metric_source": "PREDICTED",
         }

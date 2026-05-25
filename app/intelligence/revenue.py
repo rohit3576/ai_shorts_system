@@ -55,8 +55,6 @@ class RevenueEstimator:
 
     async def payload(self, session: AsyncSession) -> dict[str, Any]:
         rows = await self.refresh(session)
-        if not rows:
-            rows = self._demo_rows()
         total_revenue = sum(item.estimated_revenue for item in rows)
         projected = sum(item.projected_monthly_revenue for item in rows)
         views = sum(item.views for item in rows)
@@ -64,6 +62,9 @@ class RevenueEstimator:
         by_channel = await self._channel_breakdown(session, rows)
         return {
             "summary": {
+                "metric_source": "ESTIMATED",
+                "real_revenue": None,
+                "message": "No real analytics collected yet." if not rows else "Revenue is estimated from real view counts and configured RPM.",
                 "estimated_revenue": round(total_revenue, 2),
                 "projected_monthly": round(projected, 2),
                 "views": views,
@@ -77,7 +78,11 @@ class RevenueEstimator:
         }
 
     async def _latest_snapshots(self, session: AsyncSession) -> dict[int, AnalyticsSnapshot]:
-        result = await session.execute(select(AnalyticsSnapshot).order_by(desc(AnalyticsSnapshot.captured_at)))
+        result = await session.execute(
+            select(AnalyticsSnapshot)
+            .where(AnalyticsSnapshot.metric_source == "REAL")
+            .order_by(desc(AnalyticsSnapshot.captured_at))
+        )
         latest: dict[int, AnalyticsSnapshot] = {}
         for snapshot in result.scalars().all():
             latest.setdefault(snapshot.clip_id, snapshot)
@@ -96,7 +101,7 @@ class RevenueEstimator:
             output.append(
                 {
                     "channel_id": channel_id,
-                    "name": channel.name if channel else "Network demo",
+                    "name": channel.name if channel else "Unknown channel",
                     "views": values["views"],
                     "estimated_revenue": round(values["revenue"], 2),
                     "clips": values["clips"],
@@ -129,16 +134,3 @@ class RevenueEstimator:
             "estimated_revenue": item.estimated_revenue,
             "projected_monthly_revenue": item.projected_monthly_revenue,
         }
-
-    def _demo_rows(self) -> list[RevenueSnapshot]:
-        now = datetime.now(timezone.utc)
-        return [
-            RevenueSnapshot(
-                views=1200,
-                watch_time_hours=8.4,
-                estimated_rpm=0.06,
-                estimated_revenue=0.07,
-                projected_monthly_revenue=2.1,
-                period_end=now,
-            )
-        ]

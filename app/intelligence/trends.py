@@ -139,7 +139,7 @@ class TrendEngine:
         ]
 
     async def _views_by_clip(self, session: AsyncSession) -> dict[int, int]:
-        result = await session.execute(select(AnalyticsSnapshot))
+        result = await session.execute(select(AnalyticsSnapshot).where(AnalyticsSnapshot.metric_source == "REAL"))
         views: dict[int, int] = {}
         for snapshot in result.scalars().all():
             views[snapshot.clip_id] = max(views.get(snapshot.clip_id, 0), snapshot.views)

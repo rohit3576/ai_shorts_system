@@ -32,6 +32,7 @@ async def _bootstrap(session: AsyncSession) -> dict[str, Any]:
         "learning": await services.learning_payload(session),
         "uploads": await services.uploads_payload(session),
         "logs": await services.logs_payload(session),
+        "storage": await services.storage_payload(),
         "settings": services.settings_payload(),
     }
 
@@ -259,6 +260,11 @@ async def dashboard_logs(
 @router.get("/dashboard/api/settings")
 async def dashboard_settings() -> dict[str, Any]:
     return services.settings_payload()
+
+
+@router.get("/dashboard/api/storage")
+async def dashboard_storage() -> dict[str, Any]:
+    return await services.storage_payload()
 
 
 @router.get("/favicon.ico")

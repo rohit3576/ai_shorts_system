@@ -469,7 +469,7 @@ function ChartPanel({ title, subtitle, children }) {
 function PerformanceChart({ data }) {
   const canvas = useRef(null);
   useEffect(() => {
-    if (!canvas.current) return undefined;
+    if (!data?.length || !canvas.current) return undefined;
     const chart = new Chart(canvas.current, {
       type: "line",
       data: {
@@ -499,6 +499,9 @@ function PerformanceChart({ data }) {
     });
     return () => chart.destroy();
   }, [data]);
+  if (!data?.length) {
+    return <EmptyState icon={BarChart3} title="No real analytics collected yet." text="Upload a reviewed clip and let the scheduled YouTube snapshots run." />;
+  }
   return <canvas ref={canvas} className="h-[320px] w-full" />;
 }
 
@@ -725,8 +728,10 @@ function regenerateHook(clipId) {
 function AnalyticsPage({ data }) {
   const analytics = data.analytics;
   if (!analytics) return <SkeletonGrid />;
+  const message = analytics.truth_mode?.message;
   return (
     <div className="grid gap-5">
+      {message && <Notice text={message} />}
       <section className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
         <ChartPanel title="Upload performance" subtitle="Views, retention, and response signals">
           <PerformanceChart data={analytics.timeline} />
@@ -949,11 +954,11 @@ function LearningPage({ data }) {
           <div className="mt-5 grid gap-3">
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
               <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Best duration</p>
-              <p className="mt-2 text-2xl font-black text-white">{learning.viral_patterns?.best_duration || 38}s</p>
+              <p className="mt-2 text-2xl font-black text-white">{learning.viral_patterns?.best_duration ? `${learning.viral_patterns.best_duration}s` : "No real data"}</p>
             </div>
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
               <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Dead-zone ceiling</p>
-              <p className="mt-2 text-2xl font-black text-white">{learning.viral_patterns?.dead_zone_threshold || 34}%</p>
+              <p className="mt-2 text-2xl font-black text-white">{learning.viral_patterns?.dead_zone_threshold ? `${learning.viral_patterns.dead_zone_threshold}%` : "No real data"}</p>
             </div>
             <div className="flex flex-wrap gap-2">
               {(learning.viral_patterns?.best_upload_times || []).map((time) => <span key={time} className="rounded-full bg-cyan-300/10 px-3 py-1 text-sm font-bold text-cyan-100">{time}</span>)}
@@ -968,7 +973,7 @@ function LearningPage({ data }) {
 function EngagementChart({ data }) {
   const canvas = useRef(null);
   useEffect(() => {
-    if (!canvas.current) return undefined;
+    if (!data?.length || !canvas.current) return undefined;
     const chart = new Chart(canvas.current, {
       type: "bar",
       data: {
@@ -982,6 +987,9 @@ function EngagementChart({ data }) {
     });
     return () => chart.destroy();
   }, [data]);
+  if (!data?.length) {
+    return <EmptyState icon={BarChart3} title="No real analytics collected yet." text="Likes, comments, and CTR appear only after YouTube returns real data." />;
+  }
   return <canvas ref={canvas} className="h-[320px] w-full" />;
 }
 
@@ -1178,6 +1186,14 @@ function EmptyState({ icon: Icon, title, text }) {
         <h3 className="mt-4 font-black text-white">{title}</h3>
         <p className="mt-1 max-w-sm text-sm text-slate-400">{text}</p>
       </div>
+    </div>
+  );
+}
+
+function Notice({ text }) {
+  return (
+    <div className="rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm font-semibold text-amber-100">
+      {text}
     </div>
   );
 }

@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api import router as api_router
 from app.config import settings
 from app.dashboard.routes import router as dashboard_router
+from app.importer.artifacts import ArtifactImporter
 from app.logging_config import setup_logging
 from app.scheduler.service import AppScheduler
 from database.init_db import init_db
@@ -26,6 +27,7 @@ async def lifespan(app: FastAPI):
     setup_logging(settings.log_level)
     settings.ensure_directories()
     await init_db()
+    await ArtifactImporter().import_existing()
     scheduler.start()
     yield
     scheduler.shutdown()

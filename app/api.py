@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,11 +14,16 @@ from app.editor.service import ShortsEditor
 from app.intelligence.deadzone import DeadZoneDetector
 from app.intelligence.hooks import HookTemplateEngine
 from app.intelligence.learning import LearningEngine
+from app.intelligence.negative_samples import NegativeSampleService
 from app.intelligence.profiles import ChannelProfileService
+from app.intelligence.quality_gate import QualityGateService, UploadGateError
 from app.intelligence.revenue import RevenueEstimator
 from app.intelligence.sources import SourceIngestionService
 from app.intelligence.trends import TrendEngine
 from app.intelligence.upload import UploadIntelligenceService
+from app.jobs.service import JobService
+from app.persistence.samples import ensure_generated_clip_records
+from app.storage.lifecycle import StorageLifecycleService
 from app.pipeline import ShortsPipeline
 from app.schemas import (
     AddChannelRequest,
@@ -27,6 +34,7 @@ from app.schemas import (
     ClipOut,
     RegenerateHookRequest,
     ReviewClipRequest,
+    RightsReviewRequest,
     ScheduleUploadRequest,
     TriggerResponse,
     UploadOut,
@@ -34,7 +42,7 @@ from app.schemas import (
 )
 from app.scraper.service import YouTubeScraper
 from app.uploader.service import YouTubeUploader
-from database.models import AnalyticsSnapshot, Channel, Clip, Upload, Video
+from database.models import AnalyticsSnapshot, Channel, Clip, ProcessingJob, ReviewDecision, Upload, Video
 from database.session import get_session
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -53,6 +61,10 @@ trend_engine = TrendEngine()
 upload_intelligence = UploadIntelligenceService()
 revenue_estimator = RevenueEstimator()
 learning_engine = LearningEngine()
+job_service = JobService()
+quality_gate = QualityGateService()
+negative_samples = NegativeSampleService()
+storage_lifecycle = StorageLifecycleService()
 
 
 @router.get("/health")
@@ -127,19 +139,28 @@ async def list_videos(session: AsyncSession = Depends(get_session)) -> list[Vide
 
 
 @router.post("/process", response_model=TriggerResponse)
-async def trigger_processing(background_tasks: BackgroundTasks) -> TriggerResponse:
-    """Trigger channel scanning and video processing."""
+async def trigger_processing(session: AsyncSession = Depends(get_session)) -> TriggerResponse:
+    """Queue channel scanning and video processing as a durable job."""
 
-    background_tasks.add_task(pipeline.process_new_videos)
-    return TriggerResponse(status="accepted", detail="Processing started in the background.")
+    job = await job_service.enqueue(session, job_type="process_new_videos", priority=50)
+    await session.commit()
+    return TriggerResponse(status="accepted", detail=f"Queued durable processing job {job.id}.")
 
 
 @router.post("/videos/{video_id}/process", response_model=TriggerResponse)
-async def process_video(video_id: int, background_tasks: BackgroundTasks) -> TriggerResponse:
-    """Trigger processing for one video."""
+async def process_video(video_id: int, session: AsyncSession = Depends(get_session)) -> TriggerResponse:
+    """Queue processing for one video as a durable job."""
 
-    background_tasks.add_task(pipeline.process_video, video_id)
-    return TriggerResponse(status="accepted", detail=f"Processing video {video_id}.")
+    if not await session.get(Video, video_id):
+        raise HTTPException(status_code=404, detail="Video not found")
+    job = await job_service.enqueue(
+        session,
+        job_type="process_video",
+        payload={"video_id": video_id},
+        priority=40,
+    )
+    await session.commit()
+    return TriggerResponse(status="accepted", detail=f"Queued durable video job {job.id}.")
 
 
 @router.get("/clips", response_model=list[ClipOut])
@@ -154,7 +175,6 @@ async def list_clips(session: AsyncSession = Depends(get_session)) -> list[Clip]
 async def upload_clip(
     clip_id: int,
     payload: ScheduleUploadRequest,
-    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ) -> Upload:
     """Queue and optionally upload a clip to YouTube."""
@@ -162,15 +182,28 @@ async def upload_clip(
     clip = await session.get(Clip, clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
-    upload = await uploader.enqueue_upload(
-        session,
-        clip_id=clip_id,
-        scheduled_for=payload.scheduled_for,
-    )
+    try:
+        upload = await uploader.enqueue_upload(
+            session,
+            clip_id=clip_id,
+            scheduled_for=payload.scheduled_for,
+            rights_review=payload.rights_review.model_dump() if payload.rights_review else None,
+        )
+    except UploadGateError as exc:
+        await session.commit()
+        raise HTTPException(status_code=400, detail={"message": "Upload gate failed", "reasons": exc.reasons}) from exc
     await session.commit()
     await session.refresh(upload)
     if payload.scheduled_for is None:
-        background_tasks.add_task(uploader.upload_by_id, upload.id)
+        job = await job_service.enqueue(
+            session,
+            job_type="upload",
+            payload={"upload_id": upload.id},
+            priority=30,
+        )
+        await session.commit()
+        upload.metadata_json = {**(upload.metadata_json or {}), "upload_job_id": job.id}
+        await session.commit()
     return upload
 
 
@@ -204,6 +237,7 @@ async def regenerate_subtitles(
     )
     clip.subtitle_path = str(subtitle_path)
     await editor.render_clip(session, clip)
+    await ensure_generated_clip_records(session, clip, source="subtitles_regenerated")
     await session.commit()
     await session.refresh(clip)
     return clip
@@ -230,6 +264,15 @@ async def regenerate_hook(
     metadata = dict(clip.metadata_json or {})
     metadata["human_review"] = {"action": "regenerate_hook", "selected_hook": best.__dict__}
     clip.metadata_json = metadata
+    session.add(
+        ReviewDecision(
+            clip_id=clip.id,
+            action="regenerate_hook",
+            labels_json=[],
+            reason=f"selected {best.text}",
+            metadata_json={"source": "api_review", "selected_hook": best.__dict__},
+        )
+    )
     await learning_engine.sync_events(session)
     await session.commit()
     await session.refresh(clip)
@@ -248,12 +291,33 @@ async def approve_clip(
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
     clip.status = "approved"
+    labels = _normalized_review_labels(payload.labels)
     metadata = dict(clip.metadata_json or {})
-    metadata["human_review"] = {"action": "approved", "reason": payload.reason}
+    metadata["human_review"] = {"action": "approved", "reason": payload.reason, "labels": labels}
     clip.metadata_json = metadata
+    session.add(
+        ReviewDecision(
+            clip_id=clip.id,
+            action="approved",
+            labels_json=labels,
+            reason=payload.reason,
+            reviewer=payload.reviewer,
+            metadata_json={"source": "api_review"},
+        )
+    )
     detail = f"Clip {clip_id} approved."
     if payload.schedule_upload:
-        upload = await uploader.enqueue_upload(session, clip_id=clip.id, scheduled_for=payload.scheduled_for)
+        try:
+            upload = await uploader.enqueue_upload(
+                session,
+                clip_id=clip.id,
+                scheduled_for=payload.scheduled_for,
+                rights_review=payload.rights_review.model_dump() if payload.rights_review else None,
+            )
+        except UploadGateError as exc:
+            await learning_engine.sync_events(session)
+            await session.commit()
+            raise HTTPException(status_code=400, detail={"message": "Upload gate failed", "reasons": exc.reasons}) from exc
         detail += f" Upload {upload.id} queued."
     await learning_engine.sync_events(session)
     await session.commit()
@@ -272,9 +336,27 @@ async def reject_clip(
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
     clip.status = "rejected"
+    labels = _normalized_review_labels(payload.labels)
     metadata = dict(clip.metadata_json or {})
-    metadata["human_review"] = {"action": "rejected", "reason": payload.reason}
+    metadata["human_review"] = {"action": "rejected", "reason": payload.reason, "labels": labels}
     clip.metadata_json = metadata
+    session.add(
+        ReviewDecision(
+            clip_id=clip.id,
+            action="rejected",
+            labels_json=labels,
+            reason=payload.reason,
+            reviewer=payload.reviewer,
+            metadata_json={"source": "api_review"},
+        )
+    )
+    await negative_samples.record_review(
+        session,
+        clip=clip,
+        action="rejected",
+        labels=labels,
+        reason=payload.reason,
+    )
     await learning_engine.sync_events(session)
     await session.commit()
     return TriggerResponse(status="rejected", detail=f"Clip {clip_id} rejected and added to learning memory.")
@@ -302,26 +384,65 @@ async def rerender_clip(
     )
     clip.subtitle_path = str(subtitle_path)
     await editor.render_clip(session, clip)
+    await ensure_generated_clip_records(session, clip, source="manual_rerender")
+    labels = _normalized_review_labels(payload.labels)
     metadata = dict(clip.metadata_json or {})
-    metadata["human_review"] = {"action": "rerendered", "reason": payload.reason}
+    metadata["human_review"] = {"action": "rerendered", "reason": payload.reason, "labels": labels}
     metadata["dead_zone"] = dead_zone_detector.analyze_transcript_file(
         video.transcript_path,
         clip.start_time,
         clip.end_time,
     ).to_dict()
     clip.metadata_json = metadata
+    session.add(
+        ReviewDecision(
+            clip_id=clip.id,
+            action="rerendered",
+            labels_json=labels,
+            reason=payload.reason,
+            reviewer=payload.reviewer,
+            metadata_json={"source": "api_review"},
+        )
+    )
     await learning_engine.sync_events(session)
     await session.commit()
     await session.refresh(clip)
     return clip
 
 
-@router.post("/analytics/refresh", response_model=TriggerResponse)
-async def refresh_analytics(background_tasks: BackgroundTasks) -> TriggerResponse:
-    """Refresh YouTube analytics in the background."""
+@router.post("/clips/{clip_id}/rights", response_model=TriggerResponse)
+async def record_rights_review(
+    clip_id: int,
+    payload: RightsReviewRequest,
+    session: AsyncSession = Depends(get_session),
+) -> TriggerResponse:
+    """Record structured rights/originality approval for a clip."""
 
-    background_tasks.add_task(analytics.refresh_all)
-    return TriggerResponse(status="accepted", detail="Analytics refresh started.")
+    clip = await session.get(Clip, clip_id)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    review = await quality_gate.record_rights_review(session, clip_id=clip.id, review=payload.model_dump())
+    metadata = dict(clip.metadata_json or {})
+    metadata["rights_review"] = {
+        "id": review.id,
+        "approved_for_upload": review.approved_for_upload,
+        "originality_score": review.originality_score,
+    }
+    clip.metadata_json = metadata
+    await session.commit()
+    return TriggerResponse(
+        status="recorded",
+        detail=f"Rights review {review.id} recorded with originality score {review.originality_score:.1f}.",
+    )
+
+
+@router.post("/analytics/refresh", response_model=TriggerResponse)
+async def refresh_analytics(session: AsyncSession = Depends(get_session)) -> TriggerResponse:
+    """Queue YouTube analytics refresh as a durable job."""
+
+    job = await job_service.enqueue(session, job_type="refresh_analytics", priority=20)
+    await session.commit()
+    return TriggerResponse(status="accepted", detail=f"Queued analytics job {job.id}.")
 
 
 @router.get("/analytics", response_model=AnalyticsSummaryOut)
@@ -329,11 +450,21 @@ async def fetch_analytics(session: AsyncSession = Depends(get_session)) -> Analy
     """Fetch analytics summary."""
 
     summary = await analytics.latest_summary(session)
+    totals_source = (
+        select(
+            func.max(AnalyticsSnapshot.views).label("views"),
+            func.max(AnalyticsSnapshot.likes).label("likes"),
+            func.max(AnalyticsSnapshot.comments).label("comments"),
+        )
+        .where(AnalyticsSnapshot.metric_source == "REAL")
+        .group_by(AnalyticsSnapshot.clip_id)
+        .subquery()
+    )
     totals_result = await session.execute(
         select(
-            func.coalesce(func.sum(AnalyticsSnapshot.views), 0),
-            func.coalesce(func.sum(AnalyticsSnapshot.likes), 0),
-            func.coalesce(func.sum(AnalyticsSnapshot.comments), 0),
+            func.coalesce(func.sum(totals_source.c.views), 0),
+            func.coalesce(func.sum(totals_source.c.likes), 0),
+            func.coalesce(func.sum(totals_source.c.comments), 0),
         )
     )
     views, likes, comments = totals_result.one()
@@ -346,11 +477,97 @@ async def fetch_analytics(session: AsyncSession = Depends(get_session)) -> Analy
 
 @router.post("/intelligence/refresh", response_model=TriggerResponse)
 async def refresh_intelligence(session: AsyncSession = Depends(get_session)) -> TriggerResponse:
-    """Refresh local trends, upload recommendations, revenue, and learning events."""
+    """Queue local intelligence refresh as a durable job."""
 
-    await trend_engine.refresh(session)
-    await upload_intelligence.build_recommendations(session)
-    await revenue_estimator.refresh(session)
-    await learning_engine.sync_events(session)
+    job = await job_service.enqueue(session, job_type="refresh_intelligence", priority=80)
     await session.commit()
-    return TriggerResponse(status="completed", detail="Local intelligence refreshed.")
+    return TriggerResponse(status="accepted", detail=f"Queued intelligence job {job.id}.")
+
+
+@router.get("/jobs")
+async def list_jobs(session: AsyncSession = Depends(get_session)) -> dict[str, list[dict]]:
+    """List recent durable jobs."""
+
+    result = await session.execute(select(ProcessingJob).order_by(desc(ProcessingJob.created_at)).limit(100))
+    return {"items": [_serialize_job(item) for item in result.scalars().all()]}
+
+
+@router.get("/jobs/{job_id}")
+async def get_job(job_id: int, session: AsyncSession = Depends(get_session)) -> dict:
+    """Fetch one durable job."""
+
+    job = await session.get(ProcessingJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return _serialize_job(job)
+
+
+@router.post("/jobs/run-next", response_model=TriggerResponse)
+async def run_next_jobs() -> TriggerResponse:
+    """Manually run due jobs; useful when the scheduler is disabled."""
+
+    count = await job_service.process_due_jobs(limit=3)
+    return TriggerResponse(status="completed", detail=f"Processed {count} due job(s).")
+
+
+@router.get("/storage")
+async def storage_status() -> dict[str, Any]:
+    """Return media storage inventory and cleanup mode."""
+
+    return await storage_lifecycle.payload()
+
+
+@router.post("/storage/cleanup", response_model=TriggerResponse)
+async def queue_storage_cleanup(session: AsyncSession = Depends(get_session)) -> TriggerResponse:
+    """Queue storage cleanup as a durable job."""
+
+    job = await job_service.enqueue(session, job_type="cleanup_storage", priority=90)
+    await session.commit()
+    return TriggerResponse(status="accepted", detail=f"Queued storage cleanup job {job.id}.")
+
+
+@router.post("/clips/import-existing", response_model=TriggerResponse)
+async def queue_existing_clip_import(session: AsyncSession = Depends(get_session)) -> TriggerResponse:
+    """Queue import of existing final_short/preview MP4 artifacts."""
+
+    job = await job_service.enqueue(session, job_type="import_existing_clips", priority=10)
+    await session.commit()
+    return TriggerResponse(status="accepted", detail=f"Queued existing clip import job {job.id}.")
+
+
+def _normalized_review_labels(labels: list[str]) -> list[str]:
+    allowed = {
+        "boring",
+        "weak hook",
+        "no payoff",
+        "repetitive",
+        "confusing",
+        "low energy",
+        "policy risk",
+        "good pacing",
+        "strong clip",
+        "viral potential",
+    }
+    normalized = []
+    for label in labels:
+        value = " ".join(label.strip().lower().replace("_", " ").split())
+        if value and value in allowed and value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
+def _serialize_job(job: ProcessingJob) -> dict:
+    return {
+        "id": job.id,
+        "job_type": job.job_type,
+        "status": job.status,
+        "attempts": job.attempts,
+        "max_attempts": job.max_attempts,
+        "payload": job.payload_json or {},
+        "result": job.result_json or {},
+        "error": job.error,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        "duration_seconds": job.duration_seconds,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+    }

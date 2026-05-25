@@ -20,6 +20,7 @@ from app.intelligence.profiles import ChannelProfileService
 from app.intelligence.revenue import RevenueEstimator
 from app.intelligence.trends import TrendEngine
 from app.intelligence.upload import UploadIntelligenceService
+from app.storage.lifecycle import StorageLifecycleService
 from database.models import (
     AnalyticsSnapshot,
     Channel,
@@ -37,6 +38,7 @@ trend_engine = TrendEngine()
 upload_intelligence = UploadIntelligenceService()
 revenue_estimator = RevenueEstimator()
 learning_engine = LearningEngine()
+storage_lifecycle = StorageLifecycleService()
 
 
 def _iso(value: Any) -> str | None:
@@ -58,51 +60,6 @@ def _file_url(path: str | None) -> str | None:
 
 def _clip_duration(clip: Clip) -> float:
     return max(0.0, float(clip.end_time or 0) - float(clip.start_time or 0))
-
-
-def filesystem_clips(limit: int = 8) -> list[dict[str, Any]]:
-    """Expose locally rendered Shorts when the DB has not recorded them yet."""
-
-    clips_dir = settings.clips_dir
-    media_files = sorted(
-        clips_dir.glob("*.mp4"),
-        key=lambda item: item.stat().st_mtime,
-        reverse=True,
-    )
-    items: list[dict[str, Any]] = []
-    for index, path in enumerate(media_files[:limit], start=1):
-        subtitle_path = path.with_suffix(".ass")
-        if not subtitle_path.exists():
-            subtitle_matches = list(clips_dir.glob(f"{path.stem}*.ass"))
-            subtitle_path = subtitle_matches[0] if subtitle_matches else subtitle_path
-        created_at = datetime.fromtimestamp(path.stat().st_mtime).isoformat()
-        score = max(74.0, 88.0 - ((index - 1) * 3.5))
-        items.append(
-            {
-                "id": f"local-{index}",
-                "video_id": None,
-                "title": path.stem.replace("_", " ").title(),
-                "description": "Locally generated Short ready for review.",
-                "hook_text": "This Moment Changes Everything" if index == 1 else path.stem.replace("_", " ").title(),
-                "hashtags": ["#shorts", "#ai", "#viral"],
-                "reason": "Selected from the local render output. Review the hook, pacing, and captions before upload.",
-                "retention_score": score,
-                "viral_score": score / 100,
-                "duration": 32,
-                "status": "generated",
-                "upload_status": "not queued",
-                "clip_url": _file_url(str(path)),
-                "subtitle_url": _file_url(str(subtitle_path)) if subtitle_path.exists() else None,
-                "created_at": created_at,
-                "insights": {
-                    "emotional": max(70, round(score - 4)),
-                    "curiosity": min(96, round(score + 5)),
-                    "pacing": min(94, round(score + 2)),
-                    "conflict": max(60, round(score - 13)),
-                },
-            }
-        )
-    return items
 
 
 def serialize_clip(
@@ -129,7 +86,14 @@ def serialize_clip(
         "hashtags": clip.hashtags or [],
         "reason": clip.reason,
         "retention_score": round(float(retention_score or 0), 1),
+        "retention_score_source": "PREDICTED",
         "viral_score": float(clip.viral_score or 0),
+        "viral_score_source": "PREDICTED",
+        "metric_sources": {
+            "retention_score": "PREDICTED",
+            "viral_score": "PREDICTED",
+            "insights": "PREDICTED",
+        },
         "duration": round(_clip_duration(clip), 1),
         "status": clip.status,
         "upload_status": upload_status or "not queued",
@@ -205,13 +169,22 @@ async def overview_payload(session: AsyncSession) -> dict[str, Any]:
         select(func.count(Video.id)).where(Video.status.in_(["processing", "downloaded", "audio_extracted", "transcribed"]))
     ) or 0
     avg_score = await session.scalar(select(func.avg(Clip.viral_score))) or 0
-    total_views = await session.scalar(select(func.coalesce(func.sum(AnalyticsSnapshot.views), 0))) or 0
+    latest_views = (
+        select(func.max(AnalyticsSnapshot.views).label("views"))
+        .where(AnalyticsSnapshot.metric_source == "REAL")
+        .group_by(AnalyticsSnapshot.clip_id)
+        .subquery()
+    )
+    total_views = await session.scalar(select(func.coalesce(func.sum(latest_views.c.views), 0))) or 0
 
     videos_result = await session.execute(select(Video).order_by(desc(Video.created_at)).limit(8))
     clips_result = await session.execute(select(Clip).order_by(desc(Clip.viral_score)).limit(8))
     uploads_result = await session.execute(select(Upload).order_by(desc(Upload.created_at)).limit(8))
     analytics_result = await session.execute(
-        select(AnalyticsSnapshot).order_by(asc(AnalyticsSnapshot.captured_at)).limit(30)
+        select(AnalyticsSnapshot)
+        .where(AnalyticsSnapshot.metric_source == "REAL")
+        .order_by(asc(AnalyticsSnapshot.captured_at))
+        .limit(30)
     )
 
     clip_rows = list(clips_result.scalars().all())
@@ -220,11 +193,6 @@ async def overview_payload(session: AsyncSession) -> dict[str, Any]:
     )
     intelligence_by_clip = {item.clip_id: item for item in intelligence_result.scalars().all()}
     clips = [serialize_clip(item, intelligence=intelligence_by_clip.get(item.id)) for item in clip_rows]
-    if not clips:
-        clips = filesystem_clips(limit=8)
-        total_clips = max(total_clips, len(clips))
-        if clips and not avg_score:
-            avg_score = sum(item["viral_score"] for item in clips) / len(clips)
     videos = [serialize_video(item) for item in videos_result.scalars().all()]
     uploads = [serialize_upload(item) for item in uploads_result.scalars().all()]
     analytics = list(analytics_result.scalars().all())
@@ -241,16 +209,22 @@ async def overview_payload(session: AsyncSession) -> dict[str, Any]:
         }
         for item in analytics
     ]
-    if not timeline:
-        timeline = demo_timeline()
 
     return {
+        "truth_mode": {
+            "actual_metrics": "REAL",
+            "predicted_metrics": "PREDICTED",
+            "estimated_revenue": "ESTIMATED",
+            "message": "No real analytics collected yet." if not analytics else None,
+        },
         "stats": {
             "processed_videos": total_videos,
             "generated_shorts": total_clips,
             "queued_uploads": queued_uploads,
             "average_retention": round(float(avg_score) * 100, 1),
+            "average_retention_source": "PREDICTED",
             "total_views": int(total_views),
+            "total_views_source": "REAL",
             "active_pipelines": active_pipelines,
             "active_channels": active_channels,
         },
@@ -297,17 +271,6 @@ async def clips_payload(
     )
     intelligence_by_clip = {item.clip_id: item for item in intelligence_result.scalars().all()}
 
-    if not clips and offset == 0 and (status in (None, "generated")):
-        fallback = filesystem_clips(limit=limit)
-        return {
-            "items": fallback,
-            "total": len(fallback),
-            "limit": limit,
-            "offset": offset,
-            "status": status,
-            "sort": sort,
-        }
-
     return {
         "items": [serialize_clip(clip, upload_by_clip.get(clip.id), intelligence_by_clip.get(clip.id)) for clip in clips],
         "total": await session.scalar(count_query) or 0,
@@ -319,7 +282,12 @@ async def clips_payload(
 
 
 async def analytics_payload(session: AsyncSession) -> dict[str, Any]:
-    result = await session.execute(select(AnalyticsSnapshot).order_by(asc(AnalyticsSnapshot.captured_at)).limit(60))
+    result = await session.execute(
+        select(AnalyticsSnapshot)
+        .where(AnalyticsSnapshot.metric_source == "REAL")
+        .order_by(asc(AnalyticsSnapshot.captured_at))
+        .limit(60)
+    )
     snapshots = list(result.scalars().all())
     timeline = [
         {
@@ -331,27 +299,34 @@ async def analytics_payload(session: AsyncSession) -> dict[str, Any]:
             "ctr": item.ctr or 0,
         }
         for item in snapshots
-    ] or demo_timeline()
+    ]
 
-    top_result = await session.execute(select(Clip).order_by(desc(Clip.viral_score)).limit(8))
+    top_result = await session.execute(
+        select(Clip)
+        .join(AnalyticsSnapshot, AnalyticsSnapshot.clip_id == Clip.id)
+        .where(AnalyticsSnapshot.metric_source == "REAL")
+        .order_by(desc(AnalyticsSnapshot.views))
+        .limit(8)
+    )
     top_rows = list(top_result.scalars().all())
     intelligence_result = await session.execute(
         select(ClipIntelligence).where(ClipIntelligence.clip_id.in_([clip.id for clip in top_rows] or [-1]))
     )
     intelligence_by_clip = {item.clip_id: item for item in intelligence_result.scalars().all()}
     top_clips = [serialize_clip(item, intelligence=intelligence_by_clip.get(item.id)) for item in top_rows]
-    if not top_clips:
-        top_clips = filesystem_clips(limit=8)
     return {
+        "truth_mode": {
+            "actual_metrics": "REAL",
+            "predicted_scores": "PREDICTED",
+            "message": "No real analytics collected yet." if not snapshots else None,
+        },
         "timeline": timeline,
         "top_clips": top_clips,
-        "best_hooks": [{"hook": item["hook_text"], "score": item["retention_score"]} for item in top_clips[:5]],
-        "styles": [
-            {"name": "Fast captions", "score": 91},
-            {"name": "Face close-up", "score": 88},
-            {"name": "Curiosity hook", "score": 84},
-            {"name": "Zoom pulse", "score": 79},
+        "best_hooks": [
+            {"hook": item["hook_text"], "score": item["retention_score"], "metric_source": "PREDICTED"}
+            for item in top_clips[:5]
         ],
+        "styles": [],
     }
 
 
@@ -393,22 +368,18 @@ async def ai_insights_payload(session: AsyncSession) -> dict[str, Any]:
     result = await session.execute(select(ClipIntelligence).order_by(desc(ClipIntelligence.retention_score)).limit(80))
     rows = list(result.scalars().all())
     if not rows:
-        clips = filesystem_clips(limit=6)
         return {
             "summary": {
-                "avg_retention": round(sum(item["retention_score"] for item in clips) / max(1, len(clips)), 1),
-                "avg_viral_probability": 78,
-                "auto_schedule_ready": 1 if clips else 0,
+                "avg_retention": 0,
+                "avg_viral_probability": 0,
+                "auto_schedule_ready": 0,
                 "review_queue": 0,
+                "metric_source": "PREDICTED",
+                "message": "No clip intelligence yet.",
             },
-            "signals": ai_insights(clips),
-            "top_reasons": [
-                {"label": "curiosity gap", "value": 93},
-                {"label": "strong pacing", "value": 90},
-                {"label": "emotional charge", "value": 84},
-                {"label": "conflict/stakes", "value": 75},
-            ],
-            "clips": clips,
+            "signals": [],
+            "top_reasons": [],
+            "clips": [],
         }
     avg = lambda attr: round(sum(float(getattr(item, attr) or 0) for item in rows) / len(rows), 1)
     reasons: dict[str, int] = {}
@@ -481,6 +452,10 @@ async def logs_payload(session: AsyncSession, *, limit: int = 80, level: str | N
     if level:
         rows = [row for row in rows if row["level"] == level]
     return {"items": rows[: max(1, min(limit, 200))]}
+
+
+async def storage_payload() -> dict[str, Any]:
+    return await storage_lifecycle.payload()
 
 
 def settings_payload() -> dict[str, Any]:
@@ -558,26 +533,11 @@ def build_activity(
 
 def ai_insights(clips: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not clips:
-        return [
-            {"label": "Curiosity", "value": 82, "tone": "cyan"},
-            {"label": "Emotional lift", "value": 76, "tone": "violet"},
-            {"label": "Pacing", "value": 88, "tone": "emerald"},
-            {"label": "Conflict", "value": 64, "tone": "amber"},
-        ]
+        return []
     avg = lambda key: round(sum(item["insights"][key] for item in clips) / len(clips))
     return [
         {"label": "Curiosity", "value": avg("curiosity"), "tone": "cyan"},
         {"label": "Emotional lift", "value": avg("emotional"), "tone": "violet"},
         {"label": "Pacing", "value": avg("pacing"), "tone": "emerald"},
         {"label": "Conflict", "value": avg("conflict"), "tone": "amber"},
-    ]
-
-
-def demo_timeline() -> list[dict[str, Any]]:
-    return [
-        {"label": "Mon", "views": 120, "likes": 14, "comments": 2, "retention": 64, "ctr": 3.2},
-        {"label": "Tue", "views": 310, "likes": 39, "comments": 5, "retention": 71, "ctr": 4.6},
-        {"label": "Wed", "views": 260, "likes": 28, "comments": 4, "retention": 68, "ctr": 4.1},
-        {"label": "Thu", "views": 540, "likes": 66, "comments": 9, "retention": 78, "ctr": 5.7},
-        {"label": "Fri", "views": 720, "likes": 93, "comments": 14, "retention": 82, "ctr": 6.3},
     ]

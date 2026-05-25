@@ -4,6 +4,19 @@ Local-first AI agent pipeline for monitoring YouTube channels, detecting new upl
 
 The default setup uses only local/open-source tools plus the YouTube API for optional upload/analytics OAuth. Uploads are disabled by default.
 
+For a beginner-friendly, Windows-first operating manual, read [docs/REAL_CREATOR_SYSTEM_GUIDE.md](docs/REAL_CREATOR_SYSTEM_GUIDE.md).
+
+## Truth Mode
+
+The platform now separates metrics by source:
+
+- `REAL`: collected from YouTube Data API / YouTube Analytics API or from explicit human review actions.
+- `PREDICTED`: local retention, hook, pacing, and virality scores before upload.
+- `ESTIMATED`: derived values such as revenue estimates from real views and configured RPM.
+- `DEMO`: not used in dashboard analytics.
+
+If no real YouTube analytics has been collected, the dashboard says: `No real analytics collected yet.`
+
 ## Architecture
 
 ```text
@@ -15,8 +28,11 @@ app/
   captions/       Ollama metadata generation and ASS subtitle rendering
   editor/         OpenCV focus detection and FFmpeg 9:16 MP4 rendering
   uploader/       YouTube upload queue and OAuth uploader
-  analytics/      YouTube Data/Analytics API snapshots
-  scheduler/      APScheduler recurring automation
+  analytics/      YouTube Data/Analytics API snapshots with truth labels
+  jobs/           Durable persisted jobs and stage tracking
+  importer/       Backfills existing final_short/preview MP4s into the DB
+  storage/        Media lifecycle inventory, cleanup, and archive mode
+  scheduler/      APScheduler recurring automation that queues durable jobs
   dashboard/      Dark FastAPI/Jinja operations UI
 database/         SQLAlchemy models and SQLite schema
 data/             Local media/transcript/clip outputs
@@ -81,13 +97,14 @@ curl -X POST http://127.0.0.1:8000/api/process
 
 1. `scraper` scans YouTube RSS feeds and inserts unseen videos.
 2. `downloader` downloads highest-quality media with yt-dlp.
-3. `downloader.AudioExtractor` creates normalized mono MP3 speech audio.
+3. `downloader.AudioExtractor` creates normalized mono WAV speech audio.
 4. `transcription` runs whisper.cpp and writes normalized timestamped JSON.
 5. `clip_detector` prompts Ollama for viral moments and ranks candidates.
 6. `captions` generates title, description, hashtags, hook text, and animated ASS subtitles.
 7. `editor` estimates focus with OpenCV, crops to 9:16, burns subtitles, adds hook text, normalizes audio, and exports MP4.
-8. `uploader` queues or uploads Shorts.
-9. `analytics` records views, likes, comments, CTR, and retention when available.
+8. `uploader` requires human approval plus a structured rights/originality gate before queueing uploads.
+9. `analytics` records real views, likes, comments, CTR, retention, watch time, and subscriber gain when YouTube returns them.
+10. `learning` exports JSONL/CSV datasets and calibration reports from real outcomes and review labels.
 
 ## FFmpeg Commands Used
 
@@ -171,14 +188,20 @@ The first upload opens an OAuth browser flow and stores `youtube_token.json`. Sc
 | `POST` | `/api/channels` | Add channel |
 | `GET` | `/api/channels` | List channels |
 | `GET` | `/api/videos` | List source videos |
-| `POST` | `/api/process` | Scan and process in background |
-| `POST` | `/api/videos/{video_id}/process` | Process one video |
+| `POST` | `/api/process` | Queue durable scan/process job |
+| `POST` | `/api/videos/{video_id}/process` | Queue durable one-video job |
 | `GET` | `/api/clips` | List generated clips |
 | `POST` | `/api/clips/{clip_id}/upload` | Queue/upload clip |
 | `GET` | `/api/uploads` | List upload queue |
 | `POST` | `/api/clips/{clip_id}/subtitles/regenerate` | Rebuild subtitles and rerender |
 | `GET` | `/api/analytics` | Fetch analytics summary |
-| `POST` | `/api/analytics/refresh` | Refresh analytics in background |
+| `POST` | `/api/analytics/refresh` | Queue durable analytics refresh |
+| `GET` | `/api/jobs` | List durable jobs |
+| `POST` | `/api/jobs/run-next` | Run due durable jobs manually |
+| `POST` | `/api/clips/{clip_id}/rights` | Record rights/originality review |
+| `POST` | `/api/clips/import-existing` | Import existing MP4 artifacts |
+| `GET` | `/api/storage` | Storage lifecycle status |
+| `POST` | `/api/storage/cleanup` | Queue cleanup/archive job |
 
 ## SQLite Schema
 
@@ -190,7 +213,12 @@ Tables:
 - `videos`: discovered source videos and processing paths.
 - `clips`: viral clip timestamps, scores, metadata, subtitle path, MP4 path.
 - `uploads`: YouTube upload queue/status records.
-- `analytics`: point-in-time performance snapshots.
+- `analytics`: point-in-time performance snapshots labeled `REAL` or `PREDICTED`.
+- `processing_jobs` / `job_stages`: crash-resumable local work queue.
+- `review_decisions`, `rights_reviews`, `quality_gate_results`: human review and upload safety gates.
+- `negative_samples`: rejected, weak, failed, repetitive, and low-retention examples.
+- `media_assets`: tracked files for cleanup/archive rules.
+- `calibration_reports`: prediction-vs-outcome accuracy reports.
 
 SQLite is the default:
 
@@ -245,4 +273,3 @@ Production hardening checklist:
 ## Notes on Free Execution
 
 The default system uses local CPU/GPU resources, local models, SQLite, FFmpeg, OpenCV, yt-dlp, and whisper.cpp. YouTube API usage requires OAuth and quota, but no paid AI API is required.
-
