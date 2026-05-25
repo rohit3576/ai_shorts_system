@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database.base import Base
@@ -134,8 +134,167 @@ class AnalyticsSnapshot(TimestampMixin, Base):
     upload: Mapped[Upload | None] = relationship(back_populates="analytics")
 
 
+class ChannelProfile(TimestampMixin, Base):
+    """Creator-facing strategy profile for a managed Shorts channel."""
+
+    __tablename__ = "channel_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), unique=True, nullable=False)
+    niche_type: Mapped[str] = mapped_column(String(80), default="general", nullable=False)
+    target_audience: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    upload_style: Mapped[str] = mapped_column(String(80), default="curiosity clips", nullable=False)
+    hook_style: Mapped[str] = mapped_column(String(80), default="curiosity gap", nullable=False)
+    subtitle_style: Mapped[str] = mapped_column(String(80), default="tiktok punch captions", nullable=False)
+    pacing_style: Mapped[str] = mapped_column(String(80), default="fast cut", nullable=False)
+    target_duration_seconds: Mapped[int] = mapped_column(Integer, default=38, nullable=False)
+    upload_frequency_per_day: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    schedule_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    estimated_shorts_rpm: Mapped[float] = mapped_column(Float, default=0.06, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+    channel: Mapped[Channel] = relationship()
+
+
+class SourceFeed(TimestampMixin, Base):
+    """A local-first ingest source such as a channel, playlist, or creator URL."""
+
+    __tablename__ = "source_feeds"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[int | None] = mapped_column(ForeignKey("channels.id"), nullable=True)
+    source_type: Mapped[str] = mapped_column(String(40), default="channel", nullable=False)
+    url: Mapped[str] = mapped_column(String(1024), unique=True, nullable=False)
+    label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+    channel: Mapped[Channel | None] = relationship()
+
+
+class ClipIntelligence(TimestampMixin, Base):
+    """Retention and virality scoring captured before rendering a Short."""
+
+    __tablename__ = "clip_intelligence"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clip_id: Mapped[int] = mapped_column(ForeignKey("clips.id"), unique=True, nullable=False)
+    channel_profile_id: Mapped[int | None] = mapped_column(ForeignKey("channel_profiles.id"), nullable=True)
+    retention_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    viral_probability: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    curiosity_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    emotional_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    pacing_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    hook_strength_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    conflict_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    danger_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    surprise_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    humor_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    quality_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    hook_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    decision: Mapped[str] = mapped_column(String(40), default="review", nullable=False)
+    reasons_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+    clip: Mapped[Clip] = relationship()
+    channel_profile: Mapped[ChannelProfile | None] = relationship()
+
+
+class TrendSignal(TimestampMixin, Base):
+    """Locally mined keyword/topic trend signal."""
+
+    __tablename__ = "trend_signals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    niche_type: Mapped[str] = mapped_column(String(80), default="general", nullable=False)
+    keyword: Mapped[str] = mapped_column(String(140), nullable=False)
+    source: Mapped[str] = mapped_column(String(60), default="local_metadata", nullable=False)
+    score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    velocity: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    evidence_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+    __table_args__ = (UniqueConstraint("niche_type", "keyword", "source", name="uq_trend_keyword_source"),)
+
+
+class LearningEvent(TimestampMixin, Base):
+    """A reusable learning sample from performance, rendering, or AI scoring."""
+
+    __tablename__ = "learning_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[int | None] = mapped_column(ForeignKey("channels.id"), nullable=True)
+    clip_id: Mapped[int | None] = mapped_column(ForeignKey("clips.id"), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(60), default="clip_outcome", nullable=False)
+    outcome_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    metrics_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    features_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    learned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    channel: Mapped[Channel | None] = relationship()
+    clip: Mapped[Clip | None] = relationship()
+
+
+class RevenueSnapshot(TimestampMixin, Base):
+    """Estimated Shorts revenue based on local analytics and RPM assumptions."""
+
+    __tablename__ = "revenue_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[int | None] = mapped_column(ForeignKey("channels.id"), nullable=True)
+    clip_id: Mapped[int | None] = mapped_column(ForeignKey("clips.id"), nullable=True)
+    upload_id: Mapped[int | None] = mapped_column(ForeignKey("uploads.id"), nullable=True)
+    views: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    watch_time_hours: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    estimated_rpm: Mapped[float] = mapped_column(Float, default=0.06, nullable=False)
+    estimated_revenue: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    projected_monthly_revenue: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+    channel: Mapped[Channel | None] = relationship()
+    clip: Mapped[Clip | None] = relationship()
+    upload: Mapped[Upload | None] = relationship()
+
+
+class UploadRecommendation(TimestampMixin, Base):
+    """AI/media-ops recommendation for when and how to publish a Short."""
+
+    __tablename__ = "upload_recommendations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[int | None] = mapped_column(ForeignKey("channels.id"), nullable=True)
+    clip_id: Mapped[int | None] = mapped_column(ForeignKey("clips.id"), nullable=True)
+    recommended_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    confidence_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    title: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    hashtags: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    thumbnail_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(40), default="recommended", nullable=False)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+    channel: Mapped[Channel | None] = relationship()
+    clip: Mapped[Clip | None] = relationship()
+
+
 Index("ix_videos_channel_status", Video.channel_id, Video.status)
 Index("ix_clips_video_score", Clip.video_id, Clip.viral_score)
 Index("ix_uploads_status_scheduled", Upload.status, Upload.scheduled_for)
 Index("ix_analytics_clip_captured", AnalyticsSnapshot.clip_id, AnalyticsSnapshot.captured_at)
-
+Index("ix_channel_profiles_niche", ChannelProfile.niche_type, ChannelProfile.active)
+Index("ix_source_feeds_type_active", SourceFeed.source_type, SourceFeed.active)
+Index("ix_clip_intelligence_scores", ClipIntelligence.retention_score, ClipIntelligence.viral_probability)
+Index("ix_trend_signals_niche_score", TrendSignal.niche_type, TrendSignal.score)
+Index("ix_learning_events_type_score", LearningEvent.event_type, LearningEvent.outcome_score)
+Index("ix_revenue_snapshots_channel_period", RevenueSnapshot.channel_id, RevenueSnapshot.period_end)
+Index("ix_upload_recommendations_status_time", UploadRecommendation.status, UploadRecommendation.recommended_for)

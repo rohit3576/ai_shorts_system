@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     temp_dir: Path = Path("temp")
     models_dir: Path = Path("models")
+    training_dir: Path = Path("data/training")
 
     ffmpeg_binary: str = "ffmpeg"
     ffprobe_binary: str = "ffprobe"
@@ -106,6 +107,10 @@ class Settings(BaseSettings):
     def thumbnails_dir(self) -> Path:
         return self.resolve_path(self.data_dir) / "thumbnails"
 
+    @property
+    def training_data_dir(self) -> Path:
+        return self.resolve_path(self.training_dir)
+
     def ensure_directories(self) -> None:
         """Create all local runtime directories if they do not exist."""
 
@@ -116,6 +121,7 @@ class Settings(BaseSettings):
             self.transcripts_dir,
             self.clips_dir,
             self.thumbnails_dir,
+            self.training_data_dir,
             self.resolve_path(self.temp_dir),
             self.resolve_path(self.models_dir),
             self.project_root / "database",

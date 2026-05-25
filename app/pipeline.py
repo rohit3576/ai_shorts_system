@@ -15,6 +15,11 @@ from app.clip_detector.service import ClipCandidate, ViralClipDetector
 from app.config import settings
 from app.downloader.service import AudioExtractor, VideoDownloader
 from app.editor.service import ShortsEditor
+from app.intelligence.deadzone import DeadZoneDetector
+from app.intelligence.hooks import HookTemplateEngine
+from app.intelligence.retention import RetentionScorer
+from app.intelligence.sources import SourceIngestionService
+from app.intelligence.upload import UploadIntelligenceService
 from app.scraper.service import YouTubeScraper
 from app.transcription.service import WhisperCppTranscriber
 from app.uploader.service import YouTubeUploader
@@ -33,16 +38,22 @@ class ShortsPipeline:
         self.audio_extractor = AudioExtractor()
         self.transcriber = WhisperCppTranscriber()
         self.detector = ViralClipDetector()
+        self.dead_zone_detector = DeadZoneDetector()
+        self.hook_engine = HookTemplateEngine()
+        self.retention_scorer = RetentionScorer()
         self.caption_generator = CaptionGenerator()
         self.subtitle_engine = SubtitleEngine()
         self.editor = ShortsEditor()
         self.uploader = YouTubeUploader()
+        self.source_ingestion = SourceIngestionService()
+        self.upload_intelligence = UploadIntelligenceService()
 
     async def process_new_videos(self) -> dict[str, Any]:
         """Scan channels and process discovered videos."""
 
         async with AsyncSessionLocal() as session:
             discovered = await self.scraper.scan_all_channels(session)
+            discovered.extend(await self.source_ingestion.scan_sources(session))
             await session.commit()
 
             result = await session.execute(
@@ -134,6 +145,31 @@ class ShortsPipeline:
         )
         session.add(clip)
         await session.flush()
+        selected_hook = await self.hook_engine.apply_best_hook(
+            session,
+            clip,
+            transcript_excerpt=transcript_excerpt,
+        )
+        dead_zone_report = self.dead_zone_detector.analyze_transcript_file(
+            video.transcript_path or "",
+            clip.start_time,
+            clip.end_time,
+        )
+        await self.retention_scorer.score_clip(
+            session,
+            clip,
+            transcript_excerpt=transcript_excerpt,
+            candidate=candidate,
+            dead_zone_report=dead_zone_report,
+            hook_variants=[
+                selected_hook,
+                *[
+                    type(selected_hook)(**item)
+                    for item in (clip.metadata_json or {}).get("hook_variants", [])
+                    if item.get("text") != selected_hook.text
+                ][:5],
+            ],
+        )
 
         subtitle_path = self.subtitle_engine.generate_for_clip(
             transcript_path=video.transcript_path or "",
@@ -143,6 +179,7 @@ class ShortsPipeline:
         )
         clip.subtitle_path = str(subtitle_path)
         await self.editor.render_clip(session, clip)
+        await self.upload_intelligence.build_recommendations(session)
 
         if settings.youtube_upload_enabled:
             await self.uploader.enqueue_upload(session, clip_id=clip.id)
@@ -157,4 +194,3 @@ class ShortsPipeline:
             if float(segment["end"]) >= start_time and float(segment["start"]) <= end_time:
                 lines.append(segment["text"])
         return " ".join(lines)
-

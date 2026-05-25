@@ -9,13 +9,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.analytics.service import AnalyticsService
 from app.captions.subtitles import SubtitleEngine
 from app.editor.service import ShortsEditor
+from app.intelligence.deadzone import DeadZoneDetector
+from app.intelligence.hooks import HookTemplateEngine
+from app.intelligence.learning import LearningEngine
+from app.intelligence.profiles import ChannelProfileService
+from app.intelligence.revenue import RevenueEstimator
+from app.intelligence.sources import SourceIngestionService
+from app.intelligence.trends import TrendEngine
+from app.intelligence.upload import UploadIntelligenceService
 from app.pipeline import ShortsPipeline
 from app.schemas import (
     AddChannelRequest,
+    AddSourceRequest,
     AnalyticsSnapshotOut,
     AnalyticsSummaryOut,
     ChannelOut,
     ClipOut,
+    RegenerateHookRequest,
+    ReviewClipRequest,
     ScheduleUploadRequest,
     TriggerResponse,
     UploadOut,
@@ -34,6 +45,14 @@ uploader = YouTubeUploader()
 analytics = AnalyticsService()
 subtitle_engine = SubtitleEngine()
 editor = ShortsEditor()
+dead_zone_detector = DeadZoneDetector()
+hook_engine = HookTemplateEngine()
+profile_service = ChannelProfileService()
+source_service = SourceIngestionService()
+trend_engine = TrendEngine()
+upload_intelligence = UploadIntelligenceService()
+revenue_estimator = RevenueEstimator()
+learning_engine = LearningEngine()
 
 
 @router.get("/health")
@@ -51,6 +70,14 @@ async def add_channel(
     """Add a YouTube channel to the monitor list."""
 
     channel = await scraper.add_channel(session, url=payload.url, name=payload.name)
+    await profile_service.ensure_profile(
+        session,
+        channel,
+        niche_type=payload.niche_type,
+        upload_style=payload.upload_style,
+        hook_style=payload.hook_style,
+        target_audience=payload.target_audience,
+    )
     await session.commit()
     await session.refresh(channel)
     return channel
@@ -62,6 +89,33 @@ async def list_channels(session: AsyncSession = Depends(get_session)) -> list[Ch
 
     result = await session.execute(select(Channel).order_by(desc(Channel.created_at)))
     return list(result.scalars().all())
+
+
+@router.post("/sources", response_model=TriggerResponse)
+async def add_source(
+    payload: AddSourceRequest,
+    session: AsyncSession = Depends(get_session),
+) -> TriggerResponse:
+    """Add a monitored channel, playlist, creator, or source URL."""
+
+    source = await source_service.add_source(
+        session,
+        url=payload.url,
+        source_type=payload.source_type,
+        label=payload.label,
+        channel_id=payload.channel_id,
+    )
+    await session.commit()
+    return TriggerResponse(status="created", detail=f"Source {source.id} added.")
+
+
+@router.post("/sources/scan", response_model=TriggerResponse)
+async def scan_sources(session: AsyncSession = Depends(get_session)) -> TriggerResponse:
+    """Scan source feeds and queue newly discovered videos."""
+
+    discovered = await source_service.scan_sources(session)
+    await session.commit()
+    return TriggerResponse(status="completed", detail=f"Discovered {len(discovered)} source videos.")
 
 
 @router.get("/videos", response_model=list[VideoOut])
@@ -155,6 +209,113 @@ async def regenerate_subtitles(
     return clip
 
 
+@router.post("/clips/{clip_id}/hooks/regenerate", response_model=ClipOut)
+async def regenerate_hook(
+    clip_id: int,
+    payload: RegenerateHookRequest,
+    session: AsyncSession = Depends(get_session),
+) -> Clip:
+    """Regenerate and select a hook using local hook templates and learned outcomes."""
+
+    clip = await session.get(Clip, clip_id)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    transcript_excerpt = (clip.metadata_json or {}).get("transcript_excerpt", "")
+    best = await hook_engine.apply_best_hook(
+        session,
+        clip,
+        transcript_excerpt=transcript_excerpt,
+        preferred_type=payload.preferred_type,
+    )
+    metadata = dict(clip.metadata_json or {})
+    metadata["human_review"] = {"action": "regenerate_hook", "selected_hook": best.__dict__}
+    clip.metadata_json = metadata
+    await learning_engine.sync_events(session)
+    await session.commit()
+    await session.refresh(clip)
+    return clip
+
+
+@router.post("/clips/{clip_id}/review/approve", response_model=TriggerResponse)
+async def approve_clip(
+    clip_id: int,
+    payload: ReviewClipRequest,
+    session: AsyncSession = Depends(get_session),
+) -> TriggerResponse:
+    """Approve a generated Short and optionally queue it for upload."""
+
+    clip = await session.get(Clip, clip_id)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    clip.status = "approved"
+    metadata = dict(clip.metadata_json or {})
+    metadata["human_review"] = {"action": "approved", "reason": payload.reason}
+    clip.metadata_json = metadata
+    detail = f"Clip {clip_id} approved."
+    if payload.schedule_upload:
+        upload = await uploader.enqueue_upload(session, clip_id=clip.id, scheduled_for=payload.scheduled_for)
+        detail += f" Upload {upload.id} queued."
+    await learning_engine.sync_events(session)
+    await session.commit()
+    return TriggerResponse(status="approved", detail=detail)
+
+
+@router.post("/clips/{clip_id}/review/reject", response_model=TriggerResponse)
+async def reject_clip(
+    clip_id: int,
+    payload: ReviewClipRequest,
+    session: AsyncSession = Depends(get_session),
+) -> TriggerResponse:
+    """Reject a clip so future learning can avoid similar patterns."""
+
+    clip = await session.get(Clip, clip_id)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    clip.status = "rejected"
+    metadata = dict(clip.metadata_json or {})
+    metadata["human_review"] = {"action": "rejected", "reason": payload.reason}
+    clip.metadata_json = metadata
+    await learning_engine.sync_events(session)
+    await session.commit()
+    return TriggerResponse(status="rejected", detail=f"Clip {clip_id} rejected and added to learning memory.")
+
+
+@router.post("/clips/{clip_id}/review/rerender", response_model=ClipOut)
+async def rerender_clip(
+    clip_id: int,
+    payload: ReviewClipRequest,
+    session: AsyncSession = Depends(get_session),
+) -> Clip:
+    """Rerender a clip after review while preserving existing pipeline modules."""
+
+    clip = await session.get(Clip, clip_id)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    video = await session.get(Video, clip.video_id)
+    if not video or not video.transcript_path:
+        raise HTTPException(status_code=400, detail="Source transcript is missing")
+    subtitle_path = subtitle_engine.generate_for_clip(
+        transcript_path=video.transcript_path,
+        clip_id=clip.id,
+        start_time=clip.start_time,
+        end_time=clip.end_time,
+    )
+    clip.subtitle_path = str(subtitle_path)
+    await editor.render_clip(session, clip)
+    metadata = dict(clip.metadata_json or {})
+    metadata["human_review"] = {"action": "rerendered", "reason": payload.reason}
+    metadata["dead_zone"] = dead_zone_detector.analyze_transcript_file(
+        video.transcript_path,
+        clip.start_time,
+        clip.end_time,
+    ).to_dict()
+    clip.metadata_json = metadata
+    await learning_engine.sync_events(session)
+    await session.commit()
+    await session.refresh(clip)
+    return clip
+
+
 @router.post("/analytics/refresh", response_model=TriggerResponse)
 async def refresh_analytics(background_tasks: BackgroundTasks) -> TriggerResponse:
     """Refresh YouTube analytics in the background."""
@@ -182,3 +343,14 @@ async def fetch_analytics(session: AsyncSession = Depends(get_session)) -> Analy
         totals={"views": views, "likes": likes, "comments": comments},
     )
 
+
+@router.post("/intelligence/refresh", response_model=TriggerResponse)
+async def refresh_intelligence(session: AsyncSession = Depends(get_session)) -> TriggerResponse:
+    """Refresh local trends, upload recommendations, revenue, and learning events."""
+
+    await trend_engine.refresh(session)
+    await upload_intelligence.build_recommendations(session)
+    await revenue_estimator.refresh(session)
+    await learning_engine.sync_events(session)
+    await session.commit()
+    return TriggerResponse(status="completed", detail="Local intelligence refreshed.")

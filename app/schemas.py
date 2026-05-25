@@ -13,12 +13,42 @@ class AddChannelRequest(BaseModel):
 
     url: str = Field(..., description="YouTube channel URL, channel ID, or RSS feed URL")
     name: str | None = None
+    niche_type: str = "general"
+    upload_style: str = "curiosity clips"
+    hook_style: str = "curiosity gap"
+    target_audience: str | None = None
+
+
+class AddSourceRequest(BaseModel):
+    """Request body for adding a playlist, creator, or source URL."""
+
+    url: str
+    source_type: str = Field("channel", description="channel, playlist, creator, or url")
+    label: str | None = None
+    channel_id: int | None = None
 
 
 class ScheduleUploadRequest(BaseModel):
     """Request body for upload scheduling."""
 
     scheduled_for: datetime | None = None
+
+
+class ReviewClipRequest(BaseModel):
+    """Human review action for a generated Short."""
+
+    reason: str | None = None
+    schedule_upload: bool = False
+    scheduled_for: datetime | None = None
+
+
+class RegenerateHookRequest(BaseModel):
+    """Request body for regenerating a clip hook."""
+
+    preferred_type: str | None = Field(
+        default=None,
+        description="curiosity, fear, surprise, emotional, conflict, authority",
+    )
 
 
 class TriggerResponse(BaseModel):
@@ -111,4 +141,3 @@ class AnalyticsSummaryOut(BaseModel):
     snapshots: list[AnalyticsSnapshotOut]
     top_clips: list[ClipOut]
     totals: dict[str, Any]
-

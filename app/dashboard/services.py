@@ -15,7 +15,28 @@ from sqlalchemy import asc, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from database.models import AnalyticsSnapshot, Channel, Clip, Upload, Video
+from app.intelligence.learning import LearningEngine
+from app.intelligence.profiles import ChannelProfileService
+from app.intelligence.revenue import RevenueEstimator
+from app.intelligence.trends import TrendEngine
+from app.intelligence.upload import UploadIntelligenceService
+from database.models import (
+    AnalyticsSnapshot,
+    Channel,
+    ChannelProfile,
+    Clip,
+    ClipIntelligence,
+    SourceFeed,
+    Upload,
+    UploadRecommendation,
+    Video,
+)
+
+profile_service = ChannelProfileService()
+trend_engine = TrendEngine()
+upload_intelligence = UploadIntelligenceService()
+revenue_estimator = RevenueEstimator()
+learning_engine = LearningEngine()
 
 
 def _iso(value: Any) -> str | None:
@@ -84,8 +105,21 @@ def filesystem_clips(limit: int = 8) -> list[dict[str, Any]]:
     return items
 
 
-def serialize_clip(clip: Clip, upload_status: str | None = None) -> dict[str, Any]:
+def serialize_clip(
+    clip: Clip,
+    upload_status: str | None = None,
+    intelligence: ClipIntelligence | None = None,
+) -> dict[str, Any]:
     metadata = clip.metadata_json or {}
+    retention_score = (
+        intelligence.retention_score
+        if intelligence
+        else metadata.get("retention_score", round(float(clip.viral_score or 0) * 100, 1))
+    )
+    intelligence_metadata = intelligence.metadata_json if intelligence and intelligence.metadata_json else {}
+    dead_zone_payload = metadata.get("dead_zone") or intelligence_metadata.get("dead_zone") or {}
+    dead_zone_score = metadata.get("dead_zone_score", dead_zone_payload.get("dead_zone_score", 0))
+    watchability_score = metadata.get("watchability_score", intelligence_metadata.get("watchability_score", retention_score))
     return {
         "id": clip.id,
         "video_id": clip.video_id,
@@ -94,7 +128,7 @@ def serialize_clip(clip: Clip, upload_status: str | None = None) -> dict[str, An
         "hook_text": clip.hook_text or "Wait For This",
         "hashtags": clip.hashtags or [],
         "reason": clip.reason,
-        "retention_score": round(float(clip.viral_score or 0) * 100, 1),
+        "retention_score": round(float(retention_score or 0), 1),
         "viral_score": float(clip.viral_score or 0),
         "duration": round(_clip_duration(clip), 1),
         "status": clip.status,
@@ -103,11 +137,20 @@ def serialize_clip(clip: Clip, upload_status: str | None = None) -> dict[str, An
         "subtitle_url": _file_url(clip.subtitle_path),
         "created_at": _iso(clip.created_at),
         "insights": {
-            "emotional": metadata.get("emotional_score", round(float(clip.viral_score or 0) * 86)),
-            "curiosity": metadata.get("curiosity_score", round(float(clip.viral_score or 0) * 92)),
-            "pacing": metadata.get("pacing_score", round(float(clip.viral_score or 0) * 88)),
-            "conflict": metadata.get("conflict_score", round(float(clip.viral_score or 0) * 72)),
+            "emotional": round(float(intelligence.emotional_score if intelligence else metadata.get("emotional_score", round(float(clip.viral_score or 0) * 86)))),
+            "curiosity": round(float(intelligence.curiosity_score if intelligence else metadata.get("curiosity_score", round(float(clip.viral_score or 0) * 92)))),
+            "pacing": round(float(intelligence.pacing_score if intelligence else metadata.get("pacing_score", round(float(clip.viral_score or 0) * 88)))),
+            "conflict": round(float(intelligence.conflict_score if intelligence else metadata.get("conflict_score", round(float(clip.viral_score or 0) * 72)))),
+            "hook": round(float(intelligence.hook_strength_score if intelligence else metadata.get("hook_strength_score", retention_score))),
+            "viral_probability": round(float((intelligence.viral_probability * 100) if intelligence else metadata.get("viral_probability", float(clip.viral_score or 0)) * 100), 1),
+            "dead_zone": round(float(dead_zone_score or 0), 1),
+            "watchability": round(float(watchability_score or retention_score), 1),
         },
+        "hook_type": intelligence.hook_type if intelligence else metadata.get("hook_type"),
+        "decision": intelligence.decision if intelligence else metadata.get("retention_decision", "review"),
+        "human_review": metadata.get("human_review"),
+        "hook_variants": metadata.get("hook_variants", []),
+        "dead_zone": dead_zone_payload or None,
     }
 
 
@@ -171,7 +214,12 @@ async def overview_payload(session: AsyncSession) -> dict[str, Any]:
         select(AnalyticsSnapshot).order_by(asc(AnalyticsSnapshot.captured_at)).limit(30)
     )
 
-    clips = [serialize_clip(item) for item in clips_result.scalars().all()]
+    clip_rows = list(clips_result.scalars().all())
+    intelligence_result = await session.execute(
+        select(ClipIntelligence).where(ClipIntelligence.clip_id.in_([clip.id for clip in clip_rows] or [-1]))
+    )
+    intelligence_by_clip = {item.clip_id: item for item in intelligence_result.scalars().all()}
+    clips = [serialize_clip(item, intelligence=intelligence_by_clip.get(item.id)) for item in clip_rows]
     if not clips:
         clips = filesystem_clips(limit=8)
         total_clips = max(total_clips, len(clips))
@@ -244,6 +292,10 @@ async def clips_payload(
 
     upload_result = await session.execute(select(Upload).where(Upload.clip_id.in_([clip.id for clip in clips] or [-1])))
     upload_by_clip = {item.clip_id: item.status for item in upload_result.scalars().all()}
+    intelligence_result = await session.execute(
+        select(ClipIntelligence).where(ClipIntelligence.clip_id.in_([clip.id for clip in clips] or [-1]))
+    )
+    intelligence_by_clip = {item.clip_id: item for item in intelligence_result.scalars().all()}
 
     if not clips and offset == 0 and (status in (None, "generated")):
         fallback = filesystem_clips(limit=limit)
@@ -257,7 +309,7 @@ async def clips_payload(
         }
 
     return {
-        "items": [serialize_clip(clip, upload_by_clip.get(clip.id)) for clip in clips],
+        "items": [serialize_clip(clip, upload_by_clip.get(clip.id), intelligence_by_clip.get(clip.id)) for clip in clips],
         "total": await session.scalar(count_query) or 0,
         "limit": limit,
         "offset": offset,
@@ -282,7 +334,12 @@ async def analytics_payload(session: AsyncSession) -> dict[str, Any]:
     ] or demo_timeline()
 
     top_result = await session.execute(select(Clip).order_by(desc(Clip.viral_score)).limit(8))
-    top_clips = [serialize_clip(item) for item in top_result.scalars().all()]
+    top_rows = list(top_result.scalars().all())
+    intelligence_result = await session.execute(
+        select(ClipIntelligence).where(ClipIntelligence.clip_id.in_([clip.id for clip in top_rows] or [-1]))
+    )
+    intelligence_by_clip = {item.clip_id: item for item in intelligence_result.scalars().all()}
+    top_clips = [serialize_clip(item, intelligence=intelligence_by_clip.get(item.id)) for item in top_rows]
     if not top_clips:
         top_clips = filesystem_clips(limit=8)
     return {
@@ -299,8 +356,7 @@ async def analytics_payload(session: AsyncSession) -> dict[str, Any]:
 
 
 async def channels_payload(session: AsyncSession) -> dict[str, Any]:
-    result = await session.execute(select(Channel).order_by(desc(Channel.created_at)))
-    return {"items": [serialize_channel(item) for item in result.scalars().all()]}
+    return await media_network_payload(session)
 
 
 async def uploads_payload(session: AsyncSession, *, status: str | None = None, limit: int = 50) -> dict[str, Any]:
@@ -309,6 +365,105 @@ async def uploads_payload(session: AsyncSession, *, status: str | None = None, l
         query = query.where(Upload.status == status)
     result = await session.execute(query.order_by(desc(Upload.created_at)).limit(max(1, min(limit, 100))))
     return {"items": [serialize_upload(item) for item in result.scalars().all()]}
+
+
+async def media_network_payload(session: AsyncSession) -> dict[str, Any]:
+    """Return managed-channel profile and network summary data."""
+
+    payload = await profile_service.payload(session)
+    sources_result = await session.execute(select(SourceFeed).order_by(desc(SourceFeed.created_at)).limit(50))
+    payload["sources"] = [
+        {
+            "id": item.id,
+            "channel_id": item.channel_id,
+            "source_type": item.source_type,
+            "url": item.url,
+            "label": item.label,
+            "active": item.active,
+            "last_checked_at": _iso(item.last_checked_at),
+        }
+        for item in sources_result.scalars().all()
+    ]
+    return payload
+
+
+async def ai_insights_payload(session: AsyncSession) -> dict[str, Any]:
+    """Return retention intelligence and AI reasoning aggregates."""
+
+    result = await session.execute(select(ClipIntelligence).order_by(desc(ClipIntelligence.retention_score)).limit(80))
+    rows = list(result.scalars().all())
+    if not rows:
+        clips = filesystem_clips(limit=6)
+        return {
+            "summary": {
+                "avg_retention": round(sum(item["retention_score"] for item in clips) / max(1, len(clips)), 1),
+                "avg_viral_probability": 78,
+                "auto_schedule_ready": 1 if clips else 0,
+                "review_queue": 0,
+            },
+            "signals": ai_insights(clips),
+            "top_reasons": [
+                {"label": "curiosity gap", "value": 93},
+                {"label": "strong pacing", "value": 90},
+                {"label": "emotional charge", "value": 84},
+                {"label": "conflict/stakes", "value": 75},
+            ],
+            "clips": clips,
+        }
+    avg = lambda attr: round(sum(float(getattr(item, attr) or 0) for item in rows) / len(rows), 1)
+    reasons: dict[str, int] = {}
+    for item in rows:
+        for reason in item.reasons_json or []:
+            reasons[reason] = reasons.get(reason, 0) + 1
+    clip_result = await session.execute(select(Clip).where(Clip.id.in_([item.clip_id for item in rows[:10]])))
+    clips_by_id = {item.id: item for item in clip_result.scalars().all()}
+    return {
+        "summary": {
+            "avg_retention": avg("retention_score"),
+            "avg_viral_probability": round(avg("viral_probability") * 100, 1),
+            "auto_schedule_ready": sum(1 for item in rows if item.decision == "auto_schedule"),
+            "review_queue": sum(1 for item in rows if item.decision == "review"),
+        },
+        "signals": [
+            {"label": "Curiosity", "value": avg("curiosity_score"), "tone": "cyan"},
+            {"label": "Emotional lift", "value": avg("emotional_score"), "tone": "violet"},
+            {"label": "Pacing", "value": avg("pacing_score"), "tone": "emerald"},
+            {"label": "Hook strength", "value": avg("hook_strength_score"), "tone": "amber"},
+        ],
+        "top_reasons": [
+            {"label": label, "value": count}
+            for label, count in sorted(reasons.items(), key=lambda item: item[1], reverse=True)[:8]
+        ],
+        "clips": [
+            serialize_clip(clips_by_id[item.clip_id], intelligence=item)
+            for item in rows[:10]
+            if item.clip_id in clips_by_id
+        ],
+    }
+
+
+async def upload_intelligence_payload(session: AsyncSession) -> dict[str, Any]:
+    """Return recommended upload times, packaging, and auto-upload candidates."""
+
+    return await upload_intelligence.payload(session)
+
+
+async def revenue_payload(session: AsyncSession) -> dict[str, Any]:
+    """Return estimated Shorts revenue and forecast."""
+
+    return await revenue_estimator.payload(session)
+
+
+async def trend_center_payload(session: AsyncSession) -> dict[str, Any]:
+    """Return local topic and hook trend signals."""
+
+    return await trend_engine.payload(session)
+
+
+async def learning_payload(session: AsyncSession) -> dict[str, Any]:
+    """Return learned patterns and exported training dataset metadata."""
+
+    return await learning_engine.payload(session)
 
 
 async def logs_payload(session: AsyncSession, *, limit: int = 80, level: str | None = None) -> dict[str, Any]:
