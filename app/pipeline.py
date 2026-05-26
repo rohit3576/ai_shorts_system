@@ -114,6 +114,7 @@ class ShortsPipeline:
 
                 async with job_stage(session, job_id, f"detect_clips_{video.id}", stage_order=40):
                     candidates = await self.detector.detect(video.transcript_path)
+                candidates = candidates[: settings.max_render_count_per_video]
                 rendered_clip_ids: list[int] = []
                 failed_candidates: list[dict[str, Any]] = []
                 for candidate in candidates:
@@ -178,7 +179,15 @@ class ShortsPipeline:
             hashtags=metadata.hashtags,
             hook_text=metadata.hook_text or candidate.hook_text,
             status="detected",
-            metadata_json={"transcript_excerpt": transcript_excerpt},
+            metadata_json={
+                "transcript_excerpt": transcript_excerpt,
+                "hook_type": candidate.hook_type,
+                "ingestion_limits": {
+                    "max_video_duration_seconds": settings.max_video_duration_seconds,
+                    "max_download_seconds": settings.max_download_seconds,
+                    "max_render_count_per_video": settings.max_render_count_per_video,
+                },
+            },
         )
         session.add(clip)
         await session.flush()

@@ -51,7 +51,10 @@ class UploadIntelligenceService:
         return recommendations
 
     async def payload(self, session: AsyncSession) -> dict[str, Any]:
-        recommendations = await self.build_recommendations(session)
+        result = await session.execute(
+            select(UploadRecommendation).order_by(desc(UploadRecommendation.confidence_score)).limit(80)
+        )
+        recommendations = list(result.scalars().all())
         ordered = sorted(recommendations, key=lambda item: item.confidence_score, reverse=True)
         return {
             "recommended_today": [self._serialize(item) for item in ordered[:8]],

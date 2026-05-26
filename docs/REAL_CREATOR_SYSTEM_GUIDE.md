@@ -50,7 +50,7 @@ Download Ollama from https://ollama.com/download/windows.
 
 ```powershell
 ollama --version
-ollama pull llama3.1:8b
+ollama pull qwen2.5:7b
 ollama serve
 ```
 
@@ -134,7 +134,7 @@ Important beginner defaults:
 YOUTUBE_UPLOAD_ENABLED=false
 SCHEDULER_ENABLED=true
 STORAGE_CLEANUP_MODE=mark_only
-OLLAMA_MODEL=llama3.1:8b
+OLLAMA_MODEL=qwen2.5:7b
 WHISPER_CPP_BINARY=whisper-cpp
 WHISPER_MODEL_PATH=models/ggml-tiny.en.bin
 ```
@@ -335,8 +335,9 @@ Use labels honestly:
 - confusing
 - low energy
 - policy risk
-- good pacing
-- strong clip
+- strong pacing
+- high tension
+- policy risk
 - viral potential
 
 Reject weak clips. Rejections are useful negative samples.
@@ -498,7 +499,7 @@ ollama list
 If the model is missing:
 
 ```powershell
-ollama pull llama3.1:8b
+ollama pull qwen2.5:7b
 ```
 
 ### whisper.cpp Errors

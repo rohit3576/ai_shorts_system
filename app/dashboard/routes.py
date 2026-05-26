@@ -12,7 +12,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dashboard import services
-from database.session import get_session
+from database.session import get_read_session
 
 router = APIRouter(tags=["dashboard"])
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -32,7 +32,7 @@ async def _bootstrap(session: AsyncSession) -> dict[str, Any]:
         "learning": await services.learning_payload(session),
         "uploads": await services.uploads_payload(session),
         "logs": await services.logs_payload(session),
-        "storage": await services.storage_payload(),
+        "storage": await services.storage_payload(session),
         "settings": services.settings_payload(),
     }
 
@@ -61,7 +61,7 @@ async def _render_app(
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(
     request: Request,
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
     """Render the overview dashboard."""
 
@@ -71,7 +71,7 @@ async def dashboard(
 @router.get("/pipeline", response_class=HTMLResponse)
 async def pipeline_page(
     request: Request,
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
     """Render the pipeline monitor."""
 
@@ -81,7 +81,7 @@ async def pipeline_page(
 @router.get("/clips", response_class=HTMLResponse)
 async def clips_page(
     request: Request,
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
     """Render the Shorts gallery."""
 
@@ -91,7 +91,7 @@ async def clips_page(
 @router.get("/analytics", response_class=HTMLResponse)
 async def analytics_page(
     request: Request,
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
     """Render analytics."""
 
@@ -101,7 +101,7 @@ async def analytics_page(
 @router.get("/ai-insights", response_class=HTMLResponse)
 async def ai_insights_page(
     request: Request,
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
     """Render AI insights."""
 
@@ -111,7 +111,7 @@ async def ai_insights_page(
 @router.get("/upload-intelligence", response_class=HTMLResponse)
 async def upload_intelligence_page(
     request: Request,
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
     """Render upload intelligence."""
 
@@ -121,7 +121,7 @@ async def upload_intelligence_page(
 @router.get("/revenue", response_class=HTMLResponse)
 async def revenue_page(
     request: Request,
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
     """Render revenue estimates."""
 
@@ -131,7 +131,7 @@ async def revenue_page(
 @router.get("/trends", response_class=HTMLResponse)
 async def trends_page(
     request: Request,
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
     """Render trend center."""
 
@@ -141,7 +141,7 @@ async def trends_page(
 @router.get("/learning", response_class=HTMLResponse)
 async def learning_page(
     request: Request,
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
     """Render the learning engine."""
 
@@ -151,7 +151,7 @@ async def learning_page(
 @router.get("/channels", response_class=HTMLResponse)
 async def channels_page(
     request: Request,
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
     """Render channel management."""
 
@@ -161,7 +161,7 @@ async def channels_page(
 @router.get("/settings", response_class=HTMLResponse)
 async def settings_page(
     request: Request,
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
     """Render settings."""
 
@@ -171,7 +171,7 @@ async def settings_page(
 @router.get("/logs", response_class=HTMLResponse)
 async def logs_page(
     request: Request,
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
     """Render logs."""
 
@@ -179,13 +179,13 @@ async def logs_page(
 
 
 @router.get("/dashboard/api/overview")
-async def dashboard_overview(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+async def dashboard_overview(session: AsyncSession = Depends(get_read_session)) -> dict[str, Any]:
     return await services.overview_payload(session)
 
 
 @router.get("/dashboard/api/clips")
 async def dashboard_clips(
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_read_session),
     limit: int = Query(24, ge=1, le=100),
     offset: int = Query(0, ge=0),
     status: str | None = Query(default=None),
@@ -195,53 +195,48 @@ async def dashboard_clips(
 
 
 @router.get("/dashboard/api/analytics")
-async def dashboard_analytics(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+async def dashboard_analytics(session: AsyncSession = Depends(get_read_session)) -> dict[str, Any]:
     return await services.analytics_payload(session)
 
 
 @router.get("/dashboard/api/channels")
-async def dashboard_channels(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+async def dashboard_channels(session: AsyncSession = Depends(get_read_session)) -> dict[str, Any]:
     return await services.channels_payload(session)
 
 
 @router.get("/dashboard/api/ai-insights")
-async def dashboard_ai_insights(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+async def dashboard_ai_insights(session: AsyncSession = Depends(get_read_session)) -> dict[str, Any]:
     payload = await services.ai_insights_payload(session)
-    await session.commit()
     return payload
 
 
 @router.get("/dashboard/api/upload-intelligence")
-async def dashboard_upload_intelligence(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+async def dashboard_upload_intelligence(session: AsyncSession = Depends(get_read_session)) -> dict[str, Any]:
     payload = await services.upload_intelligence_payload(session)
-    await session.commit()
     return payload
 
 
 @router.get("/dashboard/api/revenue")
-async def dashboard_revenue(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+async def dashboard_revenue(session: AsyncSession = Depends(get_read_session)) -> dict[str, Any]:
     payload = await services.revenue_payload(session)
-    await session.commit()
     return payload
 
 
 @router.get("/dashboard/api/trends")
-async def dashboard_trends(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+async def dashboard_trends(session: AsyncSession = Depends(get_read_session)) -> dict[str, Any]:
     payload = await services.trend_center_payload(session)
-    await session.commit()
     return payload
 
 
 @router.get("/dashboard/api/learning")
-async def dashboard_learning(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+async def dashboard_learning(session: AsyncSession = Depends(get_read_session)) -> dict[str, Any]:
     payload = await services.learning_payload(session)
-    await session.commit()
     return payload
 
 
 @router.get("/dashboard/api/uploads")
 async def dashboard_uploads(
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_read_session),
     status: str | None = Query(default=None),
     limit: int = Query(50, ge=1, le=100),
 ) -> dict[str, Any]:
@@ -250,7 +245,7 @@ async def dashboard_uploads(
 
 @router.get("/dashboard/api/logs")
 async def dashboard_logs(
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_read_session),
     limit: int = Query(80, ge=1, le=200),
     level: str | None = Query(default=None),
 ) -> dict[str, Any]:
@@ -263,8 +258,8 @@ async def dashboard_settings() -> dict[str, Any]:
 
 
 @router.get("/dashboard/api/storage")
-async def dashboard_storage() -> dict[str, Any]:
-    return await services.storage_payload()
+async def dashboard_storage(session: AsyncSession = Depends(get_read_session)) -> dict[str, Any]:
+    return await services.storage_payload(session)
 
 
 @router.get("/favicon.ico")

@@ -30,7 +30,7 @@ HOOK_TEMPLATES: dict[str, list[str]] = {
         "This Changes Everything",
         "The Truth Is Weird",
     ],
-    "fear": [
+    "danger": [
         "This Gets Dangerous",
         "He Almost Missed It",
         "That Was A Mistake",
@@ -152,7 +152,7 @@ class HookTemplateEngine:
         lowered = text.lower()
         return {
             "curiosity": 16 if any(word in lowered for word in ["why", "secret", "truth", "nobody", "what"]) else 5,
-            "fear": 18 if any(word in lowered for word in ["danger", "risk", "afraid", "trap", "survive"]) else 0,
+            "danger": 18 if any(word in lowered for word in ["danger", "risk", "afraid", "trap", "survive"]) else 0,
             "surprise": 16 if any(word in lowered for word in ["suddenly", "actually", "wild", "insane", "unexpected"]) else 3,
             "emotional": 16 if any(word in lowered for word in ["love", "hate", "cry", "hurt", "beautiful"]) else 2,
             "conflict": 17 if any(word in lowered for word in ["wrong", "fight", "but", "however", "problem"]) else 3,
@@ -163,7 +163,7 @@ class HookTemplateEngine:
         preferred = persona.hook_style.lower()
         if hook_type in preferred:
             return 16
-        if hook_type == "fear" and "danger" in persona.emotional_profile:
+        if hook_type == "danger" and "danger" in persona.emotional_profile:
             return 11
         return int(persona.emotional_profile.get(hook_type, 50) / 10)
 

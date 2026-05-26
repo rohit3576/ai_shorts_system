@@ -53,7 +53,7 @@ Copy-Item .env.example .env
 Install local binaries:
 
 - FFmpeg: make `ffmpeg` and `ffprobe` available on `PATH`.
-- Ollama: install Ollama, then run `ollama pull llama3.1:8b`.
+- Ollama: install Ollama, then run `ollama pull qwen2.5:7b`.
 - whisper.cpp: build or install `whisper-cli`, then place a GGML model at `models/ggml-base.en.bin` or update `WHISPER_MODEL_PATH`.
 - yt-dlp: installed by `requirements.txt`, but the CLI must be available inside the active venv.
 
@@ -130,14 +130,14 @@ ffmpeg -y -ss START -t DURATION -i input.mp4 \
 
 ```powershell
 ollama serve
-ollama pull llama3.1:8b
+ollama pull qwen2.5:7b
 ```
 
 `.env` defaults:
 
 ```text
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=llama3.1:8b
+OLLAMA_MODEL=qwen2.5:7b
 ```
 
 The viral detector prompt asks for JSON clips scored on suspense, emotional tension, curiosity gap, humor/surprise, cliffhanger potential, and cold-viewer comprehension. Caption generation uses a separate prompt for title, description, hashtags, and hook overlay text.
@@ -247,7 +247,7 @@ Keep `YOUTUBE_UPLOAD_ENABLED=false` while testing. Generated media is written un
 
 For low RAM:
 
-- Use `llama3.1:8b` or a smaller Ollama model.
+- Use `qwen2.5:7b`, `llama3`, or `mistral`.
 - Use `ggml-base.en.bin` or `ggml-small.en.bin` for whisper.cpp.
 - Keep `MAX_CLIPS_PER_VIDEO=1` or `2`.
 - Keep scheduler intervals longer while working on a laptop.

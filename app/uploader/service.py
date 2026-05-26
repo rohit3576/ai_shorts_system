@@ -63,7 +63,7 @@ class YouTubeUploader:
         upload = Upload(
             clip_id=clip_id,
             status="queued",
-            privacy_status=settings.youtube_privacy_status,
+            privacy_status=self._safe_privacy_status(settings.youtube_privacy_status),
             scheduled_for=scheduled_for,
             quality_gate_status="passed",
             metadata_json={"quality_gate_id": gate.id},
@@ -187,3 +187,10 @@ class YouTubeUploader:
         while response is None:
             _status, response = request.next_chunk()
         return response["id"]
+
+    def _safe_privacy_status(self, value: str) -> str:
+        privacy = (value or "private").strip().lower()
+        if privacy not in {"private", "unlisted"}:
+            logger.warning("Unsafe privacy status %s forced to private", value)
+            return "private"
+        return privacy

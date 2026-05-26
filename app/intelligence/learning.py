@@ -134,13 +134,34 @@ class LearningEngine:
         }
 
     async def payload(self, session: AsyncSession) -> dict[str, Any]:
-        export = await self.export_dataset(session)
         result = await session.execute(select(LearningEvent).order_by(desc(LearningEvent.outcome_score)).limit(200))
         events = list(result.scalars().all())
         real_events = [event for event in events if (event.metrics_json or {}).get("has_real_analytics")]
+        calibration = await session.scalar(select(CalibrationReport).order_by(desc(CalibrationReport.generated_at)).limit(1))
+        dataset = {
+            "total_examples": len(events),
+            "successful_examples": sum(1 for event in events if event.outcome_score >= 70),
+            "failed_examples": sum(1 for event in events if event.outcome_score < 70),
+            "real_analytics_examples": len(real_events),
+            "calibration": calibration.report_json if calibration and calibration.report_json else {
+                "sample_count": 0,
+                "status": "No real analytics collected yet.",
+                "rows": [],
+            },
+            "paths": {
+                "all": str(settings.training_data_dir / "clip_outcomes.jsonl"),
+                "successful": str(settings.training_data_dir / "successful_clips.jsonl"),
+                "failed": str(settings.training_data_dir / "failed_clips.jsonl"),
+                "hooks": str(settings.training_data_dir / "hook_performance.jsonl"),
+                "dead_zones": str(settings.training_data_dir / "dead_zone_patterns.jsonl"),
+                "summary_csv": str(settings.training_data_dir / "clip_outcomes.csv"),
+                "calibration_json": str(settings.training_data_dir / "calibration_report.json"),
+                "calibration_csv": str(settings.training_data_dir / "calibration_report.csv"),
+            },
+        }
         return {
-            "dataset": export,
-            "calibration": export["calibration"],
+            "dataset": dataset,
+            "calibration": dataset["calibration"],
             "learnings": self._learnings(real_events),
             "best_patterns": self._patterns(real_events, successful=True),
             "avoid_patterns": self._patterns(events, successful=False),

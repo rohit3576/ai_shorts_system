@@ -64,7 +64,7 @@ class RegenerateHookRequest(BaseModel):
 
     preferred_type: str | None = Field(
         default=None,
-        description="curiosity, fear, surprise, emotional, conflict, authority",
+        description="curiosity, danger, surprise, emotional, conflict, authority",
     )
 
 

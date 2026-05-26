@@ -13,7 +13,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.persistence.samples import upsert_clip_media_assets, upsert_media_asset, upsert_video_media_assets
 from database.models import Clip, MediaAsset, Video
-from database.session import AsyncSessionLocal
+from database.session import AsyncSessionLocal, commit_with_retry
 
 
 class StorageLifecycleService:
@@ -35,7 +35,7 @@ class StorageLifecycleService:
                     asset.retention_state = "missing"
                     missing += 1
                     continue
-                keep_until = asset.keep_until or self.keep_until(path, asset.asset_type)
+                keep_until = self._as_aware_utc(asset.keep_until) or self.keep_until(path, asset.asset_type)
                 asset.keep_until = keep_until
                 asset.size_bytes = path.stat().st_size
                 if keep_until > now:
@@ -56,7 +56,7 @@ class StorageLifecycleService:
                     deleted += 1
                 else:
                     asset.retention_state = "expired"
-            await session.commit()
+            await commit_with_retry(session)
             return {
                 "mode": settings.storage_cleanup_mode,
                 "scanned": scanned,
@@ -67,26 +67,31 @@ class StorageLifecycleService:
                 "bytes_reclaimable": bytes_reclaimable,
             }
 
-    async def payload(self) -> dict[str, Any]:
-        async with AsyncSessionLocal() as session:
-            await self.sync_assets(session)
-            result = await session.execute(select(MediaAsset))
-            by_type: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "size_bytes": 0, "expired": 0})
-            total = 0
-            for asset in result.scalars().all():
-                bucket = by_type[asset.asset_type]
-                bucket["count"] += 1
-                bucket["size_bytes"] += asset.size_bytes or 0
-                total += asset.size_bytes or 0
-                if asset.retention_state == "expired":
-                    bucket["expired"] += 1
-            await session.commit()
-            return {
-                "mode": settings.storage_cleanup_mode,
-                "cleanup_enabled": settings.cleanup_enabled,
-                "total_size_bytes": total,
-                "by_type": dict(by_type),
-            }
+    async def payload(self, session=None) -> dict[str, Any]:
+        """Return cached storage inventory without writing to SQLite."""
+
+        if session is not None:
+            return await self._payload_from_session(session)
+        async with AsyncSessionLocal() as read_session:
+            return await self._payload_from_session(read_session)
+
+    async def _payload_from_session(self, session) -> dict[str, Any]:
+        result = await session.execute(select(MediaAsset))
+        by_type: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "size_bytes": 0, "expired": 0})
+        total = 0
+        for asset in result.scalars().all():
+            bucket = by_type[asset.asset_type]
+            bucket["count"] += 1
+            bucket["size_bytes"] += asset.size_bytes or 0
+            total += asset.size_bytes or 0
+            if asset.retention_state == "expired":
+                bucket["expired"] += 1
+        return {
+            "mode": settings.storage_cleanup_mode,
+            "cleanup_enabled": settings.cleanup_enabled,
+            "total_size_bytes": total,
+            "by_type": dict(by_type),
+        }
 
     async def sync_assets(self, session) -> None:
         videos = await session.execute(select(Video))
@@ -95,11 +100,16 @@ class StorageLifecycleService:
         clips = await session.execute(select(Clip))
         for clip in clips.scalars().all():
             await upsert_clip_media_assets(session, clip)
-        for temp_file in settings.resolve_path(settings.temp_dir).glob("*"):
-            if temp_file.is_file():
+        temp_patterns = ["*", "*.wav", "*.tmp", "*.part"]
+        seen_temp: set[Path] = set()
+        for pattern in temp_patterns:
+            for temp_file in settings.resolve_path(settings.temp_dir).glob(pattern):
+                if not temp_file.is_file() or temp_file in seen_temp:
+                    continue
+                seen_temp.add(temp_file)
                 await upsert_media_asset(
                     session,
-                    asset_type="temp",
+                    asset_type="temp_wav" if temp_file.suffix.lower() == ".wav" else "temp",
                     file_path=str(temp_file.resolve()),
                     owner_table=None,
                     owner_id=None,
@@ -123,6 +133,7 @@ class StorageLifecycleService:
             "preview": settings.preview_retention_days,
             "rendered_clip": settings.rendered_clip_retention_days,
             "temp": settings.temp_retention_days,
+            "temp_wav": settings.temp_retention_days,
         }.get(asset_type, settings.preview_retention_days)
         created = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
         return created + timedelta(days=days)
@@ -134,3 +145,10 @@ class StorageLifecycleService:
         except ValueError:
             relative = Path(path.name)
         return settings.archive_dir / relative
+
+    def _as_aware_utc(self, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)

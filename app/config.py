@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     whisper_threads: int = 4
 
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "llama3.1:8b"
+    ollama_model: str = "qwen2.5:7b"
     ollama_timeout_seconds: int = 120
 
     scheduler_interval_minutes: int = 30
@@ -56,7 +56,12 @@ class Settings(BaseSettings):
     min_clip_seconds: int = 18
     max_clip_seconds: int = 58
     viral_score_threshold: float = 0.72
-    allow_heuristic_clip_fallback: bool = True
+    allow_heuristic_clip_fallback: bool = False
+    max_video_duration_seconds: int = 10800
+    max_download_seconds: int = 900
+    processing_start_seconds: int = 0
+    processing_window_seconds: int = 900
+    max_render_count_per_video: int = 3
 
     shorts_width: int = 1080
     shorts_height: int = 1920

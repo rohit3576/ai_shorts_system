@@ -1,3 +1,12 @@
 id,clip_id,event_type,outcome_score,metric_source,has_real_analytics,views,retention_avg,ctr,hook_type,duration,labels
+9,4,clip_outcome,0.0,PREDICTED,False,0,,,curiosity gap,20.1,
+10,3,clip_outcome,0.0,PREDICTED,False,0,,,curiosity gap,18.0,
+11,2,clip_outcome,0.0,PREDICTED,False,0,,,curiosity gap,20.9,
+8,4,generated_clip,0.0,PREDICTED,,,,,curiosity gap,20.1,
+6,3,generated_clip,0.0,PREDICTED,,,,,curiosity gap,18.0,
+7,4,negative_low_retention_candidate,57.2,PREDICTED,,,,,,20.1,
+4,2,generated_clip,0.0,PREDICTED,,,,,curiosity gap,20.9,
+5,3,negative_low_retention_candidate,58.1,PREDICTED,,,,,,18.0,
+3,2,negative_low_retention_candidate,56.1,PREDICTED,,,,,,20.9,
 2,1,clip_outcome,0.0,PREDICTED,False,0,,,,18.8,
 1,1,imported_clip,0.0,PREDICTED,,,,,,18.8,

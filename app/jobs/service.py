@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -12,9 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from database.models import ProcessingJob
-from database.session import AsyncSessionLocal
+from database.session import AsyncSessionLocal, commit_with_retry
 
 logger = logging.getLogger(__name__)
+_JOB_RUNNER_LOCK = asyncio.Lock()
 
 
 class JobService:
@@ -42,9 +44,16 @@ class JobService:
         await session.flush()
         return job
 
-    async def process_due_jobs(self, *, limit: int = 2) -> int:
+    async def process_due_jobs(self, *, limit: int = 1) -> int:
         """Run queued/retry jobs that are due now."""
 
+        if _JOB_RUNNER_LOCK.locked():
+            logger.info("Durable job runner already active; skipping overlapping tick")
+            return 0
+        async with _JOB_RUNNER_LOCK:
+            return await self._process_due_jobs(limit=limit)
+
+    async def _process_due_jobs(self, *, limit: int = 1) -> int:
         now = datetime.now(timezone.utc)
         processed = 0
         async with AsyncSessionLocal() as session:
@@ -66,7 +75,7 @@ class JobService:
                 job.finished_at = None
                 job.error = None
                 job.attempts += 1
-            await session.commit()
+            await commit_with_retry(session)
 
         for job in jobs:
             await self.run_job(job.id)
@@ -86,7 +95,7 @@ class JobService:
             job.status = "running"
             job.locked_at = datetime.now(timezone.utc)
             job.started_at = job.started_at or datetime.now(timezone.utc)
-            await session.commit()
+            await commit_with_retry(session)
 
         try:
             result = await self._dispatch(job_id)
@@ -105,7 +114,7 @@ class JobService:
                 else:
                     job.status = "failed"
                     job.next_run_at = None
-                await session.commit()
+                await commit_with_retry(session)
                 return job
 
         async with AsyncSessionLocal() as session:
@@ -117,7 +126,7 @@ class JobService:
             job.finished_at = datetime.now(timezone.utc)
             job.duration_seconds = round(time.perf_counter() - started, 3)
             job.next_run_at = None
-            await session.commit()
+            await commit_with_retry(session)
             await session.refresh(job)
             return job
 
@@ -137,7 +146,6 @@ class JobService:
             job.next_run_at = datetime.now(timezone.utc)
             job.error = job.error or "Recovered stale running job after restart."
             count += 1
-        await session.flush()
         return count
 
     async def _dispatch(self, job_id: int) -> dict[str, Any]:
@@ -183,7 +191,7 @@ class JobService:
                 await UploadIntelligenceService().build_recommendations(session)
                 await RevenueEstimator().refresh(session)
                 await LearningEngine().sync_events(session)
-                await session.commit()
+                await commit_with_retry(session)
             return {"status": "refreshed"}
         if job_type == "import_existing_clips":
             from app.importer.artifacts import ArtifactImporter
@@ -198,7 +206,7 @@ class JobService:
 
             async with AsyncSessionLocal() as session:
                 result = await LearningEngine().export_dataset(session)
-                await session.commit()
+                await commit_with_retry(session)
                 return result
 
         raise ValueError(f"Unknown job type: {job_type}")

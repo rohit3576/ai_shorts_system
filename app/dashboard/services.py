@@ -6,7 +6,6 @@ only read existing database state and expose UI-friendly dictionaries.
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -29,7 +28,6 @@ from database.models import (
     ClipIntelligence,
     SourceFeed,
     Upload,
-    UploadRecommendation,
     Video,
 )
 
@@ -454,8 +452,8 @@ async def logs_payload(session: AsyncSession, *, limit: int = 80, level: str | N
     return {"items": rows[: max(1, min(limit, 200))]}
 
 
-async def storage_payload() -> dict[str, Any]:
-    return await storage_lifecycle.payload()
+async def storage_payload(session: AsyncSession | None = None) -> dict[str, Any]:
+    return await storage_lifecycle.payload(session)
 
 
 def settings_payload() -> dict[str, Any]:

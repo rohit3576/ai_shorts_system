@@ -43,7 +43,7 @@ from app.schemas import (
 from app.scraper.service import YouTubeScraper
 from app.uploader.service import YouTubeUploader
 from database.models import AnalyticsSnapshot, Channel, Clip, ProcessingJob, ReviewDecision, Upload, Video
-from database.session import get_session
+from database.session import get_read_session, get_session
 
 router = APIRouter(prefix="/api", tags=["api"])
 
@@ -96,7 +96,7 @@ async def add_channel(
 
 
 @router.get("/channels", response_model=list[ChannelOut])
-async def list_channels(session: AsyncSession = Depends(get_session)) -> list[Channel]:
+async def list_channels(session: AsyncSession = Depends(get_read_session)) -> list[Channel]:
     """List monitored channels."""
 
     result = await session.execute(select(Channel).order_by(desc(Channel.created_at)))
@@ -131,7 +131,7 @@ async def scan_sources(session: AsyncSession = Depends(get_session)) -> TriggerR
 
 
 @router.get("/videos", response_model=list[VideoOut])
-async def list_videos(session: AsyncSession = Depends(get_session)) -> list[Video]:
+async def list_videos(session: AsyncSession = Depends(get_read_session)) -> list[Video]:
     """List source videos."""
 
     result = await session.execute(select(Video).order_by(desc(Video.created_at)).limit(100))
@@ -164,7 +164,7 @@ async def process_video(video_id: int, session: AsyncSession = Depends(get_sessi
 
 
 @router.get("/clips", response_model=list[ClipOut])
-async def list_clips(session: AsyncSession = Depends(get_session)) -> list[Clip]:
+async def list_clips(session: AsyncSession = Depends(get_read_session)) -> list[Clip]:
     """List generated clips."""
 
     result = await session.execute(select(Clip).order_by(desc(Clip.created_at)).limit(100))
@@ -208,7 +208,7 @@ async def upload_clip(
 
 
 @router.get("/uploads", response_model=list[UploadOut])
-async def list_uploads(session: AsyncSession = Depends(get_session)) -> list[Upload]:
+async def list_uploads(session: AsyncSession = Depends(get_read_session)) -> list[Upload]:
     """List upload queue records."""
 
     result = await session.execute(select(Upload).order_by(desc(Upload.created_at)).limit(100))
@@ -446,7 +446,7 @@ async def refresh_analytics(session: AsyncSession = Depends(get_session)) -> Tri
 
 
 @router.get("/analytics", response_model=AnalyticsSummaryOut)
-async def fetch_analytics(session: AsyncSession = Depends(get_session)) -> AnalyticsSummaryOut:
+async def fetch_analytics(session: AsyncSession = Depends(get_read_session)) -> AnalyticsSummaryOut:
     """Fetch analytics summary."""
 
     summary = await analytics.latest_summary(session)
@@ -485,7 +485,7 @@ async def refresh_intelligence(session: AsyncSession = Depends(get_session)) -> 
 
 
 @router.get("/jobs")
-async def list_jobs(session: AsyncSession = Depends(get_session)) -> dict[str, list[dict]]:
+async def list_jobs(session: AsyncSession = Depends(get_read_session)) -> dict[str, list[dict]]:
     """List recent durable jobs."""
 
     result = await session.execute(select(ProcessingJob).order_by(desc(ProcessingJob.created_at)).limit(100))
@@ -493,7 +493,7 @@ async def list_jobs(session: AsyncSession = Depends(get_session)) -> dict[str, l
 
 
 @router.get("/jobs/{job_id}")
-async def get_job(job_id: int, session: AsyncSession = Depends(get_session)) -> dict:
+async def get_job(job_id: int, session: AsyncSession = Depends(get_read_session)) -> dict:
     """Fetch one durable job."""
 
     job = await session.get(ProcessingJob, job_id)
@@ -511,10 +511,10 @@ async def run_next_jobs() -> TriggerResponse:
 
 
 @router.get("/storage")
-async def storage_status() -> dict[str, Any]:
+async def storage_status(session: AsyncSession = Depends(get_read_session)) -> dict[str, Any]:
     """Return media storage inventory and cleanup mode."""
 
-    return await storage_lifecycle.payload()
+    return await storage_lifecycle.payload(session)
 
 
 @router.post("/storage/cleanup", response_model=TriggerResponse)
@@ -544,8 +544,10 @@ def _normalized_review_labels(labels: list[str]) -> list[str]:
         "confusing",
         "low energy",
         "policy risk",
-        "good pacing",
-        "strong clip",
+        "strong pacing",
+        "high tension",
+        "low originality",
+        "reused content risk",
         "viral potential",
     }
     normalized = []

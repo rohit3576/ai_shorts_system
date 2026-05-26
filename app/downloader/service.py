@@ -21,10 +21,19 @@ class VideoDownloader:
     async def download(self, session: AsyncSession, video: Video) -> Path:
         """Download the highest quality source video for a Video row."""
 
+        metadata = await self.fetch_metadata(video.url)
+        self.validate_metadata(metadata)
+        duration = float(metadata.get("duration") or video.duration_seconds or 0)
+        section_end = min(
+            duration or settings.max_download_seconds,
+            settings.processing_start_seconds + settings.max_download_seconds,
+        )
         output_template = settings.videos_dir / f"{video.youtube_video_id}.%(ext)s"
         command = [
             "yt-dlp",
             "--no-playlist",
+            "--download-sections",
+            f"*{settings.processing_start_seconds}-{int(section_end)}",
             "-f",
             settings.ytdlp_format,
             "--merge-output-format",
@@ -43,7 +52,14 @@ class VideoDownloader:
         video.metadata_json = {
             **(video.metadata_json or {}),
             "download_stdout": result.stdout[-2000:],
+            "ingestion_safety": self.safety_summary(metadata),
+            "processed_section": {
+                "start_seconds": settings.processing_start_seconds,
+                "end_seconds": int(section_end),
+                "max_download_seconds": settings.max_download_seconds,
+            },
         }
+        video.duration_seconds = duration or video.duration_seconds
         await session.flush()
         logger.info("Downloaded video %s to %s", video.youtube_video_id, downloaded_path)
         return downloaded_path
@@ -56,6 +72,36 @@ class VideoDownloader:
             timeout_seconds=settings.request_timeout_seconds * 2,
         )
         return json.loads(result.stdout)
+
+    def validate_metadata(self, metadata: dict) -> None:
+        """Reject source videos that are unsafe for daily creator operations."""
+
+        if metadata.get("is_live") or metadata.get("was_live") or metadata.get("live_status") in {"is_live", "is_upcoming"}:
+            raise ValueError("Ingestion rejected: live streams and upcoming streams are not processed.")
+        availability = str(metadata.get("availability") or "").lower()
+        if availability in {"private", "subscriber_only", "premium_only"}:
+            raise ValueError(f"Ingestion rejected: source video availability is {availability}.")
+        duration = float(metadata.get("duration") or 0)
+        if duration <= 0:
+            raise ValueError("Ingestion rejected: source video duration is unavailable.")
+        if duration > settings.max_video_duration_seconds:
+            raise ValueError(
+                f"Ingestion rejected: source video is {duration:.0f}s, above "
+                f"{settings.max_video_duration_seconds}s limit."
+            )
+
+    def safety_summary(self, metadata: dict) -> dict:
+        """Persist the ingest gate inputs for auditability."""
+
+        return {
+            "duration_seconds": metadata.get("duration"),
+            "availability": metadata.get("availability"),
+            "is_live": bool(metadata.get("is_live")),
+            "was_live": bool(metadata.get("was_live")),
+            "live_status": metadata.get("live_status"),
+            "max_video_duration_seconds": settings.max_video_duration_seconds,
+            "max_download_seconds": settings.max_download_seconds,
+        }
 
     def _resolve_download_path(self, youtube_video_id: str, stdout: str) -> Path:
         for line in reversed([line.strip() for line in stdout.splitlines() if line.strip()]):

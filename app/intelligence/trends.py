@@ -70,7 +70,8 @@ class TrendEngine:
         return sorted(signals, key=lambda item: item.score, reverse=True)
 
     async def payload(self, session: AsyncSession) -> dict[str, Any]:
-        signals = await self.refresh(session)
+        result = await session.execute(select(TrendSignal).order_by(desc(TrendSignal.score)).limit(120))
+        signals = list(result.scalars().all())
         by_niche: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item in signals[:80]:
             by_niche[item.niche_type].append(self._serialize(item))

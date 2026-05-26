@@ -93,11 +93,11 @@ class SubtitleEngine:
                 for word in segment["words"]:
                     word_start = float(word["start"])
                     word_end = float(word["end"])
-                    if start_time <= word_start <= end_time:
+                    if start_time <= word_start < end_time:
                         collected.append(
                             {
                                 "start": max(0.0, word_start - start_time),
-                                "end": max(0.05, min(end_time, word_end) - start_time),
+                                "end": max(word_start + 0.05, min(end_time, word_end)) - start_time,
                                 "text": word["text"],
                             }
                         )
@@ -142,7 +142,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         lines: list[str] = []
         for index, word in enumerate(words):
             start = max(0.0, float(word["start"]))
+            if start >= duration:
+                continue
             end = min(duration, max(start + 0.18, float(word["end"])))
+            if end <= start:
+                continue
             window = self._caption_window(words, index)
             rendered_tokens: list[str] = []
             for token in window:

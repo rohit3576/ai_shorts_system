@@ -51,11 +51,17 @@ Return only JSON with:
   "title": "Max 70 chars, curiosity-driven, specific, no clickbait lies",
   "description": "1-2 natural sentences with context and payoff tease",
   "hashtags": ["#shorts", "#topic", "#topic"],
-  "hook_text": "2-5 urgent words for the first 2 seconds"
+  "hook_text": "2-5 urgent words for the first 2 seconds",
+  "hook_type": "curiosity | danger | emotional | suspense"
 }}
 
-Hook examples by tone: "Wait For This", "This Gets Dangerous", "Nobody Tells You This",
-"He Was Wrong", "This Is Wild". Do not write a full sentence for hook_text.
+Create one of these hook types:
+- curiosity: opens a specific unanswered question
+- danger: points at risk or consequences
+- emotional: names the human feeling or stakes
+- suspense: makes the viewer wait for the reveal
+
+Avoid generic hooks, repeated phrasing, and full sentences.
 """.strip()
         try:
             async with httpx.AsyncClient(timeout=settings.ollama_timeout_seconds) as client:

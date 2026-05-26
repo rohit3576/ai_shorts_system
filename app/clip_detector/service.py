@@ -26,6 +26,7 @@ class ClipCandidate:
     viral_score: float
     reason: str
     hook_text: str
+    hook_type: str = "curiosity"
 
 
 class ViralClipDetector:
@@ -49,8 +50,10 @@ class ViralClipDetector:
 
         if not candidates and settings.allow_heuristic_clip_fallback:
             candidates = self._heuristic_candidates(segments)
+        elif not candidates:
+            raise RuntimeError("LLM clip detection returned no candidates and heuristic fallback is disabled.")
 
-        ranked = self._rank_candidates(candidates, segments)
+        ranked = self._diversify_candidates(self._rank_candidates(candidates, segments))
         filtered = [
             item
             for item in ranked
@@ -112,6 +115,8 @@ Rules:
 - Use exact transcript timestamps.
 - Avoid slow context unless the next sentence creates tension or curiosity.
 - hook_text must be 2-5 words, punchy, and safe to show in large text.
+- hook_type must be one of: curiosity, danger, emotional, suspense.
+- Return varied hook_type values and varied pacing; do not repeat the same opening pattern.
 
 JSON schema:
 {{
@@ -121,7 +126,8 @@ JSON schema:
       "end": 52.0,
       "score": 0.91,
       "reason": "Retention reason: hook, tension, payoff",
-      "hook_text": "Wait For This"
+      "hook_text": "Wait For This",
+      "hook_type": "suspense"
     }}
   ]
 }}
@@ -156,6 +162,7 @@ Transcript:
                     viral_score=max(0.0, min(1.0, float(item.get("score", 0.0)))),
                     reason=str(item.get("reason", "")).strip(),
                     hook_text=self._compact_hook(str(item.get("hook_text", "")).strip()),
+                    hook_type=self._normalize_hook_type(str(item.get("hook_type", "")).strip()),
                 )
             )
         return candidates
@@ -204,6 +211,7 @@ Transcript:
                             viral_score=score,
                             reason=reason,
                             hook_text=hook_text,
+                            hook_type=self._infer_hook_type(text, reason),
                         )
                     )
                 cursor += 1
@@ -220,6 +228,7 @@ Transcript:
                     viral_score=score,
                     reason=reason,
                     hook_text=self._make_hook(text, reason),
+                    hook_type=self._infer_hook_type(text, reason),
                 )
             )
         return windows
@@ -251,9 +260,35 @@ Transcript:
                     viral_score=blended_score,
                     reason=reason,
                     hook_text=self._compact_hook(candidate.hook_text or self._make_hook(text, reason)),
+                    hook_type=self._normalize_hook_type(candidate.hook_type) or self._infer_hook_type(text, reason),
                 )
             )
         return sorted(ranked, key=lambda item: item.viral_score, reverse=True)
+
+    def _diversify_candidates(self, candidates: list[ClipCandidate]) -> list[ClipCandidate]:
+        """Prefer diverse clip windows, hook types, and pacing profiles."""
+
+        selected: list[ClipCandidate] = []
+        hook_counts: dict[str, int] = {}
+        pacing_counts: dict[str, int] = {}
+        for candidate in candidates:
+            if any(self._overlap_ratio(candidate, existing) >= 0.28 for existing in selected):
+                continue
+            hook_type = self._normalize_hook_type(candidate.hook_type)
+            pacing = self._pacing_bucket(candidate)
+            if hook_counts.get(hook_type, 0) >= 2:
+                continue
+            if pacing_counts.get(pacing, 0) >= 2:
+                continue
+            selected.append(candidate)
+            hook_counts[hook_type] = hook_counts.get(hook_type, 0) + 1
+            pacing_counts[pacing] = pacing_counts.get(pacing, 0) + 1
+        return selected
+
+    def _overlap_ratio(self, first: ClipCandidate, second: ClipCandidate) -> float:
+        overlap = max(0.0, min(first.end_time, second.end_time) - max(first.start_time, second.start_time))
+        shorter = max(1.0, min(first.end_time - first.start_time, second.end_time - second.start_time))
+        return overlap / shorter
 
     def _score_window(self, text: str, duration: float, *, is_first: bool) -> tuple[float, str]:
         """Score transcript text for retention qualities."""
@@ -332,6 +367,30 @@ Transcript:
         if any(word in lowered for word in ["cool", "beautiful", "excited", "love"]):
             return "This Is Wild"
         return "Wait For This"
+
+    def _normalize_hook_type(self, value: str) -> str:
+        normalized = value.strip().lower().replace("fear", "danger")
+        if normalized in {"curiosity", "danger", "emotional", "suspense"}:
+            return normalized
+        return "curiosity"
+
+    def _infer_hook_type(self, text: str, reason: str) -> str:
+        lowered = f"{text} {reason}".lower()
+        if any(word in lowered for word in ["danger", "risk", "crash", "trap", "survive", "kill"]):
+            return "danger"
+        if any(word in lowered for word in ["hurt", "cry", "love", "hate", "angry", "beautiful"]):
+            return "emotional"
+        if any(word in lowered for word in ["wait", "then", "suddenly", "payoff", "ending"]):
+            return "suspense"
+        return "curiosity"
+
+    def _pacing_bucket(self, candidate: ClipCandidate) -> str:
+        duration = max(1.0, candidate.end_time - candidate.start_time)
+        if duration < 26:
+            return "fast"
+        if duration > 44:
+            return "slow_build"
+        return "mid"
 
     def _compact_hook(self, text: str, max_chars: int = 30) -> str:
         cleaned = re.sub(r"\s+", " ", text.replace("{", "").replace("}", "")).strip()

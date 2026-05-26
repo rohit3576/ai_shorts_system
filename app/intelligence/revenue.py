@@ -54,7 +54,8 @@ class RevenueEstimator:
         return rows
 
     async def payload(self, session: AsyncSession) -> dict[str, Any]:
-        rows = await self.refresh(session)
+        result = await session.execute(select(RevenueSnapshot).order_by(desc(RevenueSnapshot.period_end)).limit(200))
+        rows = list(result.scalars().all())
         total_revenue = sum(item.estimated_revenue for item in rows)
         projected = sum(item.projected_monthly_revenue for item in rows)
         views = sum(item.views for item in rows)
