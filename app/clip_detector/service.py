@@ -357,16 +357,18 @@ Transcript:
     def _make_hook(self, text: str, reason: str) -> str:
         lowered = f"{text} {reason}".lower()
         if any(word in lowered for word in ["danger", "risk", "scared", "crash", "trap"]):
-            return "This Gets Dangerous"
+            return "This Gets Risky"
         if any(word in lowered for word in ["wrong", "mistake", "problem", "but", "however"]):
-            return "He Was Wrong"
+            return "I Was Wrong"
         if any(word in lowered for word in ["secret", "truth", "nobody", "why"]):
-            return "Nobody Tells You This"
+            return "The Shortcut Is Hidden"
         if any(word in lowered for word in ["crazy", "insane", "shocking", "unexpected", "surprise"]):
             return "Wait For It"
+        if any(word in lowered for word in ["automate", "automation", "ai", "build", "coding", "workflow", "hours"]):
+            return "This Saved Hours"
         if any(word in lowered for word in ["cool", "beautiful", "excited", "love"]):
             return "This Is Wild"
-        return "Wait For This"
+        return "Watch The Payoff"
 
     def _normalize_hook_type(self, value: str) -> str:
         normalized = value.strip().lower().replace("fear", "danger")
@@ -386,9 +388,9 @@ Transcript:
 
     def _pacing_bucket(self, candidate: ClipCandidate) -> str:
         duration = max(1.0, candidate.end_time - candidate.start_time)
-        if duration < 26:
+        if duration < 22:
             return "fast"
-        if duration > 44:
+        if duration > 34:
             return "slow_build"
         return "mid"
 

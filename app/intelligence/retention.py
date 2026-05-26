@@ -234,9 +234,9 @@ class RetentionScorer:
             target = 3.7
         distance = abs(words_per_second - target)
         score = 94 - (distance * 24)
-        if 24 <= duration <= 44:
+        if 18 <= duration <= 38:
             score += 4
-        elif duration > 55:
+        elif duration > 38:
             score -= 8
         return max(30.0, min(98.0, score))
 

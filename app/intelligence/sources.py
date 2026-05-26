@@ -33,6 +33,14 @@ class SourceIngestionService:
         label: str | None = None,
         channel_id: int | None = None,
     ) -> SourceFeed:
+        url = url.strip()
+        source_type = source_type.strip().lower()
+        metadata: dict[str, Any] = {"created_by": "source_ingestion"}
+        if source_type == "topic" and not url.lower().startswith(("http://", "https://", "ytsearch")):
+            query = url
+            url = f"topic:{query.lower()}"
+            label = label or query
+            metadata.update({"query": query, "scan_url": f"ytsearch{8}:{query}"})
         existing = await session.scalar(select(SourceFeed).where(SourceFeed.url == url))
         if existing:
             return existing
@@ -45,7 +53,7 @@ class SourceIngestionService:
             source_type=source_type,
             url=url,
             label=label,
-            metadata_json={"created_by": "source_ingestion"},
+            metadata_json=metadata,
         )
         session.add(source)
         await session.flush()
@@ -74,7 +82,7 @@ class SourceIngestionService:
                     "--dump-single-json",
                     "--playlist-end",
                     str(limit_per_source),
-                    source.url,
+                    (source.metadata_json or {}).get("scan_url") or source.url,
                 ],
                 timeout_seconds=settings.request_timeout_seconds * 2,
             )
@@ -134,7 +142,6 @@ class SourceIngestionService:
             url=source.url,
             channel_id=payload.get("channel_id") or payload.get("uploader_id"),
             active=True,
-            metadata_json={"source_feed_id": source.id, "source_type": source.source_type},
         )
         session.add(channel)
         await session.flush()

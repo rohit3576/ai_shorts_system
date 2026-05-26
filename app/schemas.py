@@ -23,7 +23,7 @@ class AddSourceRequest(BaseModel):
     """Request body for adding a playlist, creator, or source URL."""
 
     url: str
-    source_type: str = Field("channel", description="channel, playlist, creator, or url")
+    source_type: str = Field("channel", description="channel, playlist, creator, url, or topic")
     label: str | None = None
     channel_id: int | None = None
 

@@ -1,6 +1,6 @@
-# AI Shorts Automation System
+# Personal AI Shorts Studio
 
-Local-first AI agent pipeline for monitoring YouTube channels, detecting new uploads, downloading videos, transcribing speech, finding viral moments with Ollama, rendering vertical Shorts with FFmpeg/OpenCV, generating subtitles and metadata, queueing uploads, and tracking analytics.
+Local-first AI-assisted Shorts studio for one creator: add sources, generate candidate Shorts, review hooks/captions quickly, upload privately/unlisted, and learn from real YouTube retention.
 
 The default setup uses only local/open-source tools plus the YouTube API for optional upload/analytics OAuth. Uploads are disabled by default.
 

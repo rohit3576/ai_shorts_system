@@ -47,6 +47,15 @@ POWER_WORDS = {
     "actually",
     "finally",
     "nobody",
+    "ai",
+    "automate",
+    "automated",
+    "coding",
+    "build",
+    "built",
+    "hours",
+    "shortcut",
+    "workflow",
 }
 
 
@@ -130,8 +139,8 @@ WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial Black,76,&H00FFFFFF,&H0000D7FF,&H00000000,&H90000000,1,0,0,0,100,100,0,0,1,7,2,2,76,76,280,1
-Style: Punch,Arial Black,86,&H0000D7FF,&H00FFFFFF,&H00000000,&H90000000,1,0,0,0,100,100,0,0,1,8,3,2,70,70,276,1
+Style: Default,Arial Black,70,&H00FFFFFF,&H0000D7FF,&H00000000,&H90000000,1,0,0,0,100,100,0,0,1,7,2,2,90,90,300,1
+Style: Punch,Arial Black,80,&H0000D7FF,&H00FFFFFF,&H00000000,&H90000000,1,0,0,0,100,100,0,0,1,8,3,2,86,86,296,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -179,10 +188,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         """Keep captions short enough for fast scanning."""
 
         window_start = max(0, active_index - 1)
-        window = words[window_start : min(len(words), window_start + 4)]
+        window = words[window_start : min(len(words), window_start + 3)]
         total_chars = sum(len(str(item.get("text", ""))) for item in window)
-        if total_chars > 34 and len(window) > 2:
-            return window[:3]
+        if total_chars > 28 and len(window) > 2:
+            return window[:2]
         return window
 
     def _join_tokens(self, tokens: list[str]) -> str:

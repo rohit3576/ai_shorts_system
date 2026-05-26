@@ -181,6 +181,10 @@ class ShortsPipeline:
             status="detected",
             metadata_json={
                 "transcript_excerpt": transcript_excerpt,
+                "source_title": video.title,
+                "source_url": video.url,
+                "title_variants": metadata.title_variants,
+                "description_variants": metadata.description_variants,
                 "hook_type": candidate.hook_type,
                 "ingestion_limits": {
                     "max_video_duration_seconds": settings.max_video_duration_seconds,

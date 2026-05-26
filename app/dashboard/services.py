@@ -60,10 +60,51 @@ def _clip_duration(clip: Clip) -> float:
     return max(0.0, float(clip.end_time or 0) - float(clip.start_time or 0))
 
 
+def _rights_status(metadata: dict[str, Any]) -> dict[str, Any]:
+    review = metadata.get("rights_review") or {}
+    approved = bool(review.get("approved_for_upload"))
+    if approved:
+        return {
+            "label": "Rights cleared",
+            "status": "cleared",
+            "originality_score": review.get("originality_score"),
+        }
+    return {
+        "label": "Needs rights check",
+        "status": "needs_review",
+        "originality_score": review.get("originality_score"),
+    }
+
+
+def _upload_readiness(
+    *,
+    clip: Clip,
+    retention_score: float,
+    upload_status: str | None,
+    rights_status: dict[str, Any],
+) -> dict[str, Any]:
+    if upload_status in {"queued", "uploading"}:
+        return {"label": "Upload queued", "status": "queued"}
+    if upload_status in {"uploaded", "dry_run"}:
+        return {"label": "Uploaded/private queued", "status": "uploaded"}
+    if not clip.clip_path:
+        return {"label": "Needs render", "status": "blocked"}
+    if clip.status == "rejected":
+        return {"label": "Rejected", "status": "blocked"}
+    if retention_score < 55:
+        return {"label": "Needs stronger hook", "status": "needs_work"}
+    if rights_status["status"] != "cleared":
+        return {"label": "Needs rights check", "status": "needs_rights"}
+    if clip.status == "approved":
+        return {"label": "Ready for private upload", "status": "ready"}
+    return {"label": "Needs review", "status": "review"}
+
+
 def serialize_clip(
     clip: Clip,
     upload_status: str | None = None,
     intelligence: ClipIntelligence | None = None,
+    video: Video | None = None,
 ) -> dict[str, Any]:
     metadata = clip.metadata_json or {}
     retention_score = (
@@ -75,13 +116,24 @@ def serialize_clip(
     dead_zone_payload = metadata.get("dead_zone") or intelligence_metadata.get("dead_zone") or {}
     dead_zone_score = metadata.get("dead_zone_score", dead_zone_payload.get("dead_zone_score", 0))
     watchability_score = metadata.get("watchability_score", intelligence_metadata.get("watchability_score", retention_score))
+    rights_status = _rights_status(metadata)
+    readiness = _upload_readiness(
+        clip=clip,
+        retention_score=float(retention_score or 0),
+        upload_status=upload_status,
+        rights_status=rights_status,
+    )
     return {
         "id": clip.id,
         "video_id": clip.video_id,
+        "source_title": video.title if video else metadata.get("source_title"),
+        "source_url": video.url if video else metadata.get("source_url"),
         "title": clip.title or "Untitled Short",
         "description": clip.description,
         "hook_text": clip.hook_text or "Wait For This",
         "hashtags": clip.hashtags or [],
+        "title_variants": metadata.get("title_variants", []),
+        "description_variants": metadata.get("description_variants", []),
         "reason": clip.reason,
         "retention_score": round(float(retention_score or 0), 1),
         "retention_score_source": "PREDICTED",
@@ -113,6 +165,8 @@ def serialize_clip(
         "human_review": metadata.get("human_review"),
         "hook_variants": metadata.get("hook_variants", []),
         "dead_zone": dead_zone_payload or None,
+        "rights_status": rights_status,
+        "upload_readiness": readiness,
     }
 
 
@@ -190,7 +244,14 @@ async def overview_payload(session: AsyncSession) -> dict[str, Any]:
         select(ClipIntelligence).where(ClipIntelligence.clip_id.in_([clip.id for clip in clip_rows] or [-1]))
     )
     intelligence_by_clip = {item.clip_id: item for item in intelligence_result.scalars().all()}
-    clips = [serialize_clip(item, intelligence=intelligence_by_clip.get(item.id)) for item in clip_rows]
+    clip_videos_result = await session.execute(
+        select(Video).where(Video.id.in_([clip.video_id for clip in clip_rows] or [-1]))
+    )
+    video_by_id = {item.id: item for item in clip_videos_result.scalars().all()}
+    clips = [
+        serialize_clip(item, intelligence=intelligence_by_clip.get(item.id), video=video_by_id.get(item.video_id))
+        for item in clip_rows
+    ]
     videos = [serialize_video(item) for item in videos_result.scalars().all()]
     uploads = [serialize_upload(item) for item in uploads_result.scalars().all()]
     analytics = list(analytics_result.scalars().all())
@@ -268,9 +329,19 @@ async def clips_payload(
         select(ClipIntelligence).where(ClipIntelligence.clip_id.in_([clip.id for clip in clips] or [-1]))
     )
     intelligence_by_clip = {item.clip_id: item for item in intelligence_result.scalars().all()}
+    video_result = await session.execute(select(Video).where(Video.id.in_([clip.video_id for clip in clips] or [-1])))
+    video_by_id = {item.id: item for item in video_result.scalars().all()}
 
     return {
-        "items": [serialize_clip(clip, upload_by_clip.get(clip.id), intelligence_by_clip.get(clip.id)) for clip in clips],
+        "items": [
+            serialize_clip(
+                clip,
+                upload_by_clip.get(clip.id),
+                intelligence_by_clip.get(clip.id),
+                video_by_id.get(clip.video_id),
+            )
+            for clip in clips
+        ],
         "total": await session.scalar(count_query) or 0,
         "limit": limit,
         "offset": offset,
@@ -294,6 +365,7 @@ async def analytics_payload(session: AsyncSession) -> dict[str, Any]:
             "likes": item.likes,
             "comments": item.comments,
             "retention": item.retention_avg or 0,
+            "average_view_duration_seconds": item.average_view_duration_seconds or 0,
             "ctr": item.ctr or 0,
         }
         for item in snapshots
@@ -311,7 +383,12 @@ async def analytics_payload(session: AsyncSession) -> dict[str, Any]:
         select(ClipIntelligence).where(ClipIntelligence.clip_id.in_([clip.id for clip in top_rows] or [-1]))
     )
     intelligence_by_clip = {item.clip_id: item for item in intelligence_result.scalars().all()}
-    top_clips = [serialize_clip(item, intelligence=intelligence_by_clip.get(item.id)) for item in top_rows]
+    video_result = await session.execute(select(Video).where(Video.id.in_([clip.video_id for clip in top_rows] or [-1])))
+    video_by_id = {item.id: item for item in video_result.scalars().all()}
+    top_clips = [
+        serialize_clip(item, intelligence=intelligence_by_clip.get(item.id), video=video_by_id.get(item.video_id))
+        for item in top_rows
+    ]
     return {
         "truth_mode": {
             "actual_metrics": "REAL",
@@ -337,7 +414,23 @@ async def uploads_payload(session: AsyncSession, *, status: str | None = None, l
     if status:
         query = query.where(Upload.status == status)
     result = await session.execute(query.order_by(desc(Upload.created_at)).limit(max(1, min(limit, 100))))
-    return {"items": [serialize_upload(item) for item in result.scalars().all()]}
+    uploads = list(result.scalars().all())
+    clip_result = await session.execute(select(Clip).where(Clip.id.in_([item.clip_id for item in uploads] or [-1])))
+    clips_by_id = {item.id: item for item in clip_result.scalars().all()}
+    items = []
+    for upload in uploads:
+        row = serialize_upload(upload)
+        clip = clips_by_id.get(upload.clip_id)
+        if clip:
+            row.update(
+                {
+                    "clip_title": clip.title,
+                    "hook_text": clip.hook_text,
+                    "clip_url": _file_url(clip.clip_path),
+                }
+            )
+        items.append(row)
+    return {"items": items}
 
 
 async def media_network_payload(session: AsyncSession) -> dict[str, Any]:

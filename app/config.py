@@ -24,7 +24,7 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    app_name: str = "AI Shorts Automation System"
+    app_name: str = "Personal AI Shorts Studio"
     environment: str = "local"
     log_level: str = "INFO"
     sql_echo: bool = False
@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     scheduler_enabled: bool = True
     max_clips_per_video: int = 3
     min_clip_seconds: int = 18
-    max_clip_seconds: int = 58
+    max_clip_seconds: int = 38
     viral_score_threshold: float = 0.72
     allow_heuristic_clip_fallback: bool = False
     max_video_duration_seconds: int = 10800

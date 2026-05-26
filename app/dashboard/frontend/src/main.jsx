@@ -66,22 +66,15 @@ Chart.register(
   Legend
 );
 
-const pageFromServer = window.DASHBOARD_PAGE || "overview";
+const pageFromServer = window.DASHBOARD_PAGE || "review";
 const initialPayload = window.DASHBOARD_BOOTSTRAP || {};
 
 const navItems = [
-  { id: "overview", href: "/dashboard", label: "Overview", icon: LayoutDashboard },
-  { id: "pipeline", href: "/pipeline", label: "Pipeline", icon: MonitorDot },
-  { id: "clips", href: "/clips", label: "Shorts", icon: Clapperboard },
+  { id: "sources", href: "/sources", label: "Sources", icon: Globe2 },
+  { id: "generate", href: "/generate", label: "Generate", icon: Zap },
+  { id: "review", href: "/review", label: "Review Queue", icon: Clapperboard },
+  { id: "uploads", href: "/uploads", label: "Uploads", icon: UploadCloud },
   { id: "analytics", href: "/analytics", label: "Analytics", icon: BarChart3 },
-  { id: "channels", href: "/channels", label: "Channels", icon: Globe2 },
-  { id: "ai-insights", href: "/ai-insights", label: "AI Insights", icon: Brain },
-  { id: "upload-intelligence", href: "/upload-intelligence", label: "Upload IQ", icon: CalendarClock },
-  { id: "revenue", href: "/revenue", label: "Revenue", icon: DollarSign },
-  { id: "trends", href: "/trends", label: "Trends", icon: TrendingUp },
-  { id: "learning", href: "/learning", label: "Learning", icon: Database },
-  { id: "logs", href: "/logs", label: "Live Logs", icon: Terminal },
-  { id: "settings", href: "/settings", label: "Settings", icon: Settings },
 ];
 
 function cx(...parts) {
@@ -111,61 +104,37 @@ function useDashboardData(page) {
     setLoading(true);
     try {
       const requests = [fetch("/dashboard/api/overview").then((r) => r.json())];
-      if (["clips", "overview", "pipeline"].includes(target)) {
+      if (["review", "generate"].includes(target)) {
         requests.push(fetch("/dashboard/api/clips?limit=36&sort=score").then((r) => r.json()));
       } else {
         requests.push(Promise.resolve(clips));
       }
-      if (["analytics", "overview"].includes(target)) {
+      if (target === "analytics") {
         requests.push(fetch("/dashboard/api/analytics").then((r) => r.json()));
       } else {
         requests.push(Promise.resolve(analytics));
       }
-      if (["channels", "overview"].includes(target)) {
+      if (target === "sources") {
         requests.push(fetch("/dashboard/api/channels").then((r) => r.json()));
       } else {
         requests.push(Promise.resolve(channels));
       }
-      if (["ai-insights", "overview"].includes(target)) {
-        requests.push(fetch("/dashboard/api/ai-insights").then((r) => r.json()));
-      } else {
-        requests.push(Promise.resolve(aiInsights));
-      }
-      if (target === "upload-intelligence") {
+      requests.push(Promise.resolve(aiInsights));
+      if (["uploads", "analytics"].includes(target)) {
         requests.push(fetch("/dashboard/api/upload-intelligence").then((r) => r.json()));
       } else {
         requests.push(Promise.resolve(uploadIntelligence));
       }
-      if (target === "revenue") {
-        requests.push(fetch("/dashboard/api/revenue").then((r) => r.json()));
-      } else {
-        requests.push(Promise.resolve(revenue));
-      }
-      if (target === "trends") {
-        requests.push(fetch("/dashboard/api/trends").then((r) => r.json()));
-      } else {
-        requests.push(Promise.resolve(trends));
-      }
-      if (target === "learning") {
-        requests.push(fetch("/dashboard/api/learning").then((r) => r.json()));
-      } else {
-        requests.push(Promise.resolve(learning));
-      }
-      if (["pipeline", "overview"].includes(target)) {
+      requests.push(Promise.resolve(revenue));
+      requests.push(Promise.resolve(trends));
+      requests.push(Promise.resolve(learning));
+      if (["review", "uploads"].includes(target)) {
         requests.push(fetch("/dashboard/api/uploads").then((r) => r.json()));
       } else {
         requests.push(Promise.resolve(uploads));
       }
-      if (["logs", "pipeline", "overview"].includes(target)) {
-        requests.push(fetch("/dashboard/api/logs").then((r) => r.json()));
-      } else {
-        requests.push(Promise.resolve(logs));
-      }
-      if (target === "settings") {
-        requests.push(fetch("/dashboard/api/settings").then((r) => r.json()));
-      } else {
-        requests.push(Promise.resolve(settings));
-      }
+      requests.push(Promise.resolve(logs));
+      requests.push(Promise.resolve(settings));
 
       const [
         nextOverview,
@@ -203,7 +172,7 @@ function useDashboardData(page) {
   }, [page]);
 
   useEffect(() => {
-    if (page !== "logs" && page !== "pipeline") return undefined;
+    if (page !== "generate") return undefined;
     const timer = window.setInterval(() => {
       fetch("/dashboard/api/logs")
         .then((r) => r.json())
@@ -257,18 +226,11 @@ function App() {
           <Topbar page={page} loading={data.loading} reload={() => data.reload(page)} stats={stats} />
           <MobileNav page={page} go={go} />
           <div className="mt-5">
-            {page === "overview" && <Overview data={data} onPreview={setModalClip} />}
-            {page === "pipeline" && <PipelinePage data={data} />}
-            {page === "clips" && <ClipsPage data={data} onPreview={setModalClip} />}
+            {page === "sources" && <SourcesPage data={data} />}
+            {page === "generate" && <GeneratePage data={data} onPreview={setModalClip} />}
+            {page === "review" && <ReviewQueuePage data={data} onPreview={setModalClip} />}
+            {page === "uploads" && <UploadsPage data={data} />}
             {page === "analytics" && <AnalyticsPage data={data} />}
-            {page === "channels" && <ChannelsPage data={data} />}
-            {page === "ai-insights" && <AIInsightsPage data={data} onPreview={setModalClip} />}
-            {page === "upload-intelligence" && <UploadIntelligencePage data={data} />}
-            {page === "revenue" && <RevenuePage data={data} />}
-            {page === "trends" && <TrendCenterPage data={data} />}
-            {page === "learning" && <LearningPage data={data} />}
-            {page === "logs" && <LogsPage logs={data.logs} />}
-            {page === "settings" && <SettingsPage settings={data.settings} />}
           </div>
         </main>
       </div>
@@ -278,18 +240,12 @@ function App() {
 }
 
 function pageIdFromPath(pathname) {
-  if (pathname.includes("pipeline")) return "pipeline";
-  if (pathname.includes("clips")) return "clips";
+  if (pathname.includes("sources") || pathname.includes("channels")) return "sources";
+  if (pathname.includes("generate") || pathname.includes("pipeline")) return "generate";
+  if (pathname.includes("review") || pathname.includes("clips")) return "review";
+  if (pathname.includes("uploads")) return "uploads";
   if (pathname.includes("analytics")) return "analytics";
-  if (pathname.includes("channels")) return "channels";
-  if (pathname.includes("ai-insights")) return "ai-insights";
-  if (pathname.includes("upload-intelligence")) return "upload-intelligence";
-  if (pathname.includes("revenue")) return "revenue";
-  if (pathname.includes("trends")) return "trends";
-  if (pathname.includes("learning")) return "learning";
-  if (pathname.includes("logs")) return "logs";
-  if (pathname.includes("settings")) return "settings";
-  return "overview";
+  return "review";
 }
 
 function MobileNav({ page, go }) {
@@ -321,8 +277,8 @@ function Sidebar({ page, go }) {
           <Sparkles size={22} />
         </div>
         <div>
-          <p className="text-sm font-black tracking-tight text-white">ShortsOS</p>
-          <p className="text-xs text-slate-400">AI media control center</p>
+          <p className="text-sm font-black tracking-tight text-white">AI Shorts Studio</p>
+          <p className="text-xs text-slate-400">Private creator workflow</p>
         </div>
       </div>
       <nav className="scrollbar-thin mt-8 grid max-h-[55vh] gap-1.5 overflow-auto pr-1">
@@ -344,10 +300,10 @@ function Sidebar({ page, go }) {
       <div className="absolute bottom-4 left-4 right-4 rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-4">
         <div className="mb-2 flex items-center gap-2 text-cyan-100">
           <Bot size={18} />
-          <span className="text-sm font-bold">Retention Engine</span>
+          <span className="text-sm font-bold">Today&apos;s Focus</span>
         </div>
         <p className="text-xs leading-5 text-slate-300">
-          Scoring clips by curiosity, pacing, conflict, emotional pull, and hook strength.
+          Review fast, keep the strongest hooks, and upload only rights-safe Shorts.
         </p>
       </div>
     </aside>
@@ -360,7 +316,7 @@ function Topbar({ page, loading, reload, stats }) {
       <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div className="min-w-0">
           <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.24em] text-cyan-200">
-            <Radio size={14} className="animate-pulse" /> Live workspace
+            <Radio size={14} className="animate-pulse" /> Personal AI Shorts Studio
           </p>
           <h1 className="mt-2 max-w-full break-words text-2xl font-black leading-tight tracking-tight text-white sm:text-3xl md:text-4xl">
             {titleForPage(page)}
@@ -368,13 +324,13 @@ function Topbar({ page, loading, reload, stats }) {
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className="hidden rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-300 md:block">
-            {numberFmt(stats.active_pipelines)} active pipelines
+            {numberFmt(stats.active_pipelines)} running jobs
           </div>
           <button className="control-button w-full sm:w-auto" onClick={reload} type="button">
             {loading ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />} Sync
           </button>
           <button className="primary-button w-full sm:w-auto" type="button" onClick={() => fetch("/api/process", { method: "POST" })}>
-            <Zap size={16} /> Run pipeline
+            <Zap size={16} /> Generate Shorts
           </button>
         </div>
       </div>
@@ -384,18 +340,11 @@ function Topbar({ page, loading, reload, stats }) {
 
 function titleForPage(page) {
   return {
-    overview: "AI Shorts Command Center",
-    pipeline: "Pipeline Monitor",
-    clips: "Shorts Gallery",
-    analytics: "Performance Analytics",
-    channels: "Channel Management",
-    "ai-insights": "AI Intelligence Center",
-    "upload-intelligence": "Upload Intelligence",
-    revenue: "Revenue Command",
-    trends: "Trend Center",
-    learning: "Learning Engine",
-    logs: "Live System Logs",
-    settings: "Creative Settings",
+    sources: "Sources",
+    generate: "Generate Shorts",
+    review: "Review Queue",
+    uploads: "Private Uploads",
+    analytics: "Creator Analytics",
   }[page];
 }
 
@@ -643,33 +592,43 @@ function PipelineStage({ stage, index }) {
   );
 }
 
-function ClipsPage({ data, onPreview }) {
+function ReviewQueuePage({ data, onPreview }) {
   const [filter, setFilter] = useState("all");
+  const [query, setQuery] = useState("");
   const clips = data.clips?.items || [];
-  const visible = filter === "all" ? clips : clips.filter((clip) => clip.status === filter);
+  const visible = clips.filter((clip) => {
+    const matchesFilter = filter === "all" || clip.status === filter || clip.upload_readiness?.status === filter;
+    const haystack = `${clip.hook_text || ""} ${clip.title || ""} ${clip.source_title || ""}`.toLowerCase();
+    return matchesFilter && haystack.includes(query.trim().toLowerCase());
+  });
   return (
     <div className="grid gap-5">
       <section className="soft-card p-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="relative max-w-md flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-            <input className="w-full rounded-2xl border border-white/10 bg-black/20 py-3 pl-10 pr-4 text-sm text-white outline-none ring-cyan-300/30 transition focus:ring-4" placeholder="Search hooks, scores, clips" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              className="w-full rounded-2xl border border-white/10 bg-black/20 py-3 pl-10 pr-4 text-sm text-white outline-none ring-cyan-300/30 transition focus:ring-4"
+              placeholder="Search hooks, titles, sources"
+            />
           </div>
-          <div className="flex gap-2">
-            {["all", "generated", "uploaded", "detected"].map((item) => (
+          <div className="flex flex-wrap gap-2">
+            {["all", "detected", "approved", "ready", "needs_work"].map((item) => (
               <button key={item} className={cx("control-button capitalize", filter === item && "border-cyan-300/40 bg-cyan-300/10 text-cyan-100")} onClick={() => setFilter(item)} type="button">
-                {item}
+                {item.replace("_", " ")}
               </button>
             ))}
           </div>
         </div>
       </section>
       {visible.length ? (
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {visible.map((clip) => <ClipCard key={clip.id} clip={clip} onPreview={onPreview} />)}
         </section>
       ) : (
-        <EmptyState icon={Clapperboard} title="No clips match this view" text="Try another status filter or run the pipeline." />
+        <EmptyState icon={Clapperboard} title="No Shorts match this view" text="Try another filter or generate a new batch." />
       )}
     </div>
   );
@@ -677,11 +636,13 @@ function ClipsPage({ data, onPreview }) {
 
 function ClipCard({ clip, onPreview, compact = false }) {
   const canReview = Number.isFinite(Number(clip.id));
+  const readiness = clip.upload_readiness || { label: "Needs review", status: "review" };
+  const rights = clip.rights_status || { label: "Needs rights check", status: "needs_review" };
   return (
     <article className="group soft-card overflow-hidden">
-      <div className={cx("relative bg-gradient-to-br from-slate-900 to-slate-950", compact ? "aspect-[9/10]" : "aspect-[9/12]")}>
+      <div className={cx("relative bg-gradient-to-br from-slate-900 to-slate-950", compact ? "h-52" : "h-64 md:h-48 xl:h-40")}>
         {clip.clip_url ? (
-          <video src={clip.clip_url} className="h-full w-full object-cover opacity-80 transition duration-300 group-hover:scale-[1.03] group-hover:opacity-100" muted playsInline preload="metadata" />
+          <video src={clip.clip_url} className="h-full w-full object-contain opacity-80 transition duration-300 group-hover:scale-[1.03] group-hover:opacity-100" muted playsInline preload="metadata" />
         ) : (
           <div className="grid h-full place-items-center text-slate-500"><Film size={38} /></div>
         )}
@@ -694,19 +655,43 @@ function ClipCard({ clip, onPreview, compact = false }) {
         </button>
       </div>
       <div className="p-4">
-        <h3 className="line-clamp-1 text-lg font-black text-white">{clip.hook_text}</h3>
-        <p className="mt-1 line-clamp-2 text-sm text-slate-400">{clip.reason || clip.title}</p>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <button className="control-button px-3 py-2" onClick={() => onPreview(clip)} type="button"><Play size={15} /> Preview</button>
-          {clip.clip_url && <a className="control-button px-3 py-2" href={clip.clip_url} download><Download size={15} /> Download</a>}
-          <button className="control-button px-3 py-2" disabled={!canReview} onClick={() => reviewClip(clip.id, "approve")} type="button"><CheckCircle2 size={15} /> Approve</button>
-          <button className="control-button px-3 py-2" disabled={!canReview} onClick={() => reviewClip(clip.id, "reject")} type="button"><Eye size={15} /> Reject</button>
-          <button className="control-button px-3 py-2" disabled={!canReview} onClick={() => regenerateHook(clip.id)} type="button"><Wand2 size={15} /> Hook</button>
-          <button className="control-button px-3 py-2" disabled={!canReview} onClick={() => reviewClip(clip.id, "rerender")} type="button"><RefreshCw size={15} /> Rerender</button>
+        <div className="flex flex-wrap gap-2">
+          <span className={cx("rounded-full px-3 py-1 text-xs font-black", readinessTone(readiness.status))}>{readiness.label}</span>
+          <span className={cx("rounded-full px-3 py-1 text-xs font-black", rights.status === "cleared" ? "bg-emerald-300/15 text-emerald-200" : "bg-amber-300/15 text-amber-100")}>{rights.label}</span>
+        </div>
+        <h3 className="mt-3 line-clamp-1 text-lg font-black text-white">{clip.hook_text}</h3>
+        <p className="mt-1 line-clamp-2 text-sm font-semibold text-slate-200">{clip.title}</p>
+        <p className="mt-2 line-clamp-1 text-xs text-slate-500">{clip.source_title || `Source video #${clip.video_id}`}</p>
+        <div className="mt-3 flex flex-wrap gap-2 text-xs">
+          <span className="rounded-full bg-black/20 px-3 py-1 font-black text-white">{clip.duration}s <span className="font-medium text-slate-500">duration</span></span>
+          <span className="rounded-full bg-black/20 px-3 py-1 font-black text-white">{clip.retention_score}% <span className="font-medium text-slate-500">retention</span></span>
+          <span className="rounded-full bg-black/20 px-3 py-1 font-black capitalize text-white">{clip.hook_type || "hook"}</span>
+        </div>
+        <div className="scrollbar-thin mt-3 flex gap-2 overflow-x-auto pb-1">
+          <button className="control-button shrink-0 px-3 py-2" onClick={() => onPreview(clip)} type="button"><Play size={15} /> Preview</button>
+          <button className="control-button shrink-0 px-3 py-2" disabled={!canReview} onClick={() => reviewClip(clip.id, "approve")} type="button"><CheckCircle2 size={15} /> Approve</button>
+          <button className="control-button shrink-0 px-3 py-2" disabled={!canReview} onClick={() => reviewClip(clip.id, "reject")} type="button"><Eye size={15} /> Reject</button>
+          <button className="control-button shrink-0 px-3 py-2" disabled={!canReview} onClick={() => regenerateHook(clip.id)} type="button"><Wand2 size={15} /> Regenerate Hook</button>
+          <button className="control-button shrink-0 px-3 py-2" disabled={!canReview} onClick={() => regenerateCaptions(clip.id)} type="button"><Bot size={15} /> Regenerate Captions</button>
+          <button className="control-button shrink-0 px-3 py-2" disabled={!canReview} onClick={() => reviewClip(clip.id, "rerender")} type="button"><RefreshCw size={15} /> Re-render</button>
+          <button className="primary-button shrink-0 px-3 py-2" disabled={!canReview} onClick={() => uploadPrivate(clip.id)} type="button"><UploadCloud size={15} /> Upload Private</button>
+          {clip.clip_url && <a className="control-button shrink-0 px-3 py-2" href={clip.clip_url} download><Download size={15} /> Download</a>}
         </div>
       </div>
     </article>
   );
+}
+
+function readinessTone(status) {
+  return {
+    ready: "bg-emerald-300/15 text-emerald-200",
+    queued: "bg-cyan-300/15 text-cyan-100",
+    uploaded: "bg-cyan-300/15 text-cyan-100",
+    needs_work: "bg-amber-300/15 text-amber-100",
+    needs_rights: "bg-amber-300/15 text-amber-100",
+    blocked: "bg-rose-300/15 text-rose-200",
+    review: "bg-white/10 text-slate-200",
+  }[status] || "bg-white/10 text-slate-200";
 }
 
 function reviewClip(clipId, action) {
@@ -714,6 +699,12 @@ function reviewClip(clipId, action) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ reason: "dashboard review" }),
+  }).then(() => window.location.reload()).catch(() => {});
+}
+
+function regenerateCaptions(clipId) {
+  fetch(`/api/clips/${clipId}/subtitles/regenerate`, {
+    method: "POST",
   }).then(() => window.location.reload()).catch(() => {});
 }
 
@@ -725,25 +716,181 @@ function regenerateHook(clipId) {
   }).then(() => window.location.reload()).catch(() => {});
 }
 
+async function uploadPrivate(clipId) {
+  const confirmation = window.prompt("Rights check: type OWNED, LICENSED, or TRANSFORMED to queue a private/unlisted upload.");
+  if (!confirmation) return;
+  const value = confirmation.trim().toUpperCase();
+  if (!["OWNED", "LICENSED", "TRANSFORMED"].includes(value)) {
+    window.alert("Upload cancelled. Confirm OWNED, LICENSED, or TRANSFORMED before queueing.");
+    return;
+  }
+  const rights_review = {
+    owned_content: value === "OWNED",
+    licensed_content: value === "LICENSED",
+    commentary_added: value === "TRANSFORMED",
+    narration_added: value === "TRANSFORMED",
+    transformative_edit: value === "TRANSFORMED",
+    approved_for_upload: true,
+    policy_notes: `Confirmed ${value.toLowerCase()} from review queue. Upload must remain private/unlisted until manually published.`,
+  };
+  const response = await fetch(`/api/clips/${clipId}/upload`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scheduled_for: null, rights_review }),
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}));
+    window.alert(detail?.detail?.reasons?.join("\n") || detail?.detail?.message || "Upload gate failed.");
+    return;
+  }
+  window.location.reload();
+}
+
+function SourcesPage({ data }) {
+  const sources = data.channels?.sources || [];
+  const channels = data.channels?.items || [];
+  return (
+    <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+      <section className="soft-card p-5">
+        <h2 className="text-xl font-black text-white">Add source</h2>
+        <form className="mt-5 grid gap-3" onSubmit={addSource}>
+          <select name="source_type" className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm outline-none ring-cyan-300/30 focus:ring-4">
+            <option value="url">YouTube link</option>
+            <option value="playlist">Playlist</option>
+            <option value="channel">Channel</option>
+            <option value="topic">Topic / search term</option>
+          </select>
+          <input name="url" required className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm outline-none ring-cyan-300/30 focus:ring-4" placeholder="Paste a video, playlist, channel, or topic" />
+          <input name="label" className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm outline-none ring-cyan-300/30 focus:ring-4" placeholder="Optional label" />
+          <button className="primary-button" type="submit"><Globe2 size={16} /> Add Source</button>
+        </form>
+      </section>
+      <section className="soft-card p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-xl font-black text-white">Saved sources</h2>
+          <button className="control-button" type="button" onClick={() => fetch("/api/sources/scan", { method: "POST" }).then(() => window.location.reload())}>
+            <Search size={16} /> Scan Sources
+          </button>
+        </div>
+        <div className="mt-5 grid gap-3">
+          {sources.length ? sources.map((source) => (
+            <div key={source.id} className="rounded-2xl border border-white/10 bg-black/20 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-black text-white">{source.label || source.url}</p>
+                  <p className="mt-1 truncate text-sm text-slate-500">{source.url}</p>
+                </div>
+                <span className="rounded-full bg-cyan-300/15 px-3 py-1 text-xs font-black uppercase text-cyan-100">{source.source_type}</span>
+              </div>
+            </div>
+          )) : channels.length ? channels.map((channel) => (
+            <div key={channel.id} className="rounded-2xl border border-white/10 bg-black/20 p-4">
+              <p className="font-black text-white">{channel.name}</p>
+              <p className="mt-1 truncate text-sm text-slate-500">{channel.url}</p>
+            </div>
+          )) : <EmptyState icon={Globe2} title="No sources yet" text="Add one link, playlist, channel, or topic to start generating." />}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function addSource(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  fetch("/api/sources", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      source_type: form.get("source_type"),
+      url: form.get("url"),
+      label: form.get("label") || null,
+    }),
+  }).then(() => window.location.reload()).catch(() => {});
+}
+
+function GeneratePage({ data, onPreview }) {
+  const recentVideos = data.overview?.videos || [];
+  const recentClips = data.clips?.items || [];
+  return (
+    <div className="grid gap-5">
+      <section className="grid gap-4 md:grid-cols-3">
+        <button className="primary-button min-h-24 justify-start px-5 text-left" type="button" onClick={() => fetch("/api/sources/scan", { method: "POST" }).then(() => window.location.reload())}>
+          <Search size={20} /> Scan sources
+        </button>
+        <button className="primary-button min-h-24 justify-start px-5 text-left" type="button" onClick={() => fetch("/api/process", { method: "POST" }).then(() => window.location.reload())}>
+          <Zap size={20} /> Generate candidate Shorts
+        </button>
+        <button className="control-button min-h-24 justify-start px-5 text-left" type="button" onClick={() => fetch("/api/jobs/run-next", { method: "POST" }).then(() => window.location.reload())}>
+          <Play size={20} /> Run next local job
+        </button>
+      </section>
+      <section className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+        <RankedList title="Recent source videos" items={recentVideos.map((video) => ({ label: video.title, value: video.status }))} />
+        <section className="soft-card p-5">
+          <h2 className="text-lg font-black text-white">Latest candidates</h2>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            {recentClips.slice(0, 4).map((clip) => <ClipCard key={clip.id} clip={clip} onPreview={onPreview} compact />)}
+            {!recentClips.length && <EmptyState icon={Clapperboard} title="No candidates yet" text="Run generation after adding a source." />}
+          </div>
+        </section>
+      </section>
+    </div>
+  );
+}
+
+function UploadsPage({ data }) {
+  const uploads = data.uploads?.items || [];
+  const suggestedTimes = data.uploadIntelligence?.suggested_times || [];
+  return (
+    <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
+      <section className="soft-card p-5">
+        <h2 className="text-xl font-black text-white">Private upload queue</h2>
+        <div className="mt-5 grid gap-3">
+          {uploads.length ? uploads.map((upload) => (
+            <div key={upload.id} className="rounded-2xl border border-white/10 bg-black/20 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-black text-white">{upload.hook_text || upload.clip_title || `Clip #${upload.clip_id}`}</p>
+                  <p className="mt-1 text-sm text-slate-500">{upload.privacy_status} - {upload.status}</p>
+                </div>
+                <span className="rounded-full bg-cyan-300/15 px-3 py-1 text-xs font-black text-cyan-100">{upload.scheduled_for ? formatDateTime(upload.scheduled_for) : "private now"}</span>
+              </div>
+            </div>
+          )) : <EmptyState icon={UploadCloud} title="No uploads queued" text="Approve a candidate, then use Upload Private from the review queue." />}
+        </div>
+      </section>
+      <RankedList title="Useful upload windows" items={suggestedTimes.map((item) => ({ label: item.time, value: `${item.score}%` }))} />
+    </div>
+  );
+}
+
 function AnalyticsPage({ data }) {
   const analytics = data.analytics;
   if (!analytics) return <SkeletonGrid />;
   const message = analytics.truth_mode?.message;
+  const timeline = analytics.timeline || [];
+  const stats = data.overview?.stats || {};
+  const avgWatch = timeline.length
+    ? Math.round(timeline.reduce((sum, item) => sum + Number(item.average_view_duration_seconds || 0), 0) / timeline.length)
+    : 0;
   return (
     <div className="grid gap-5">
       {message && <Notice text={message} />}
-      <section className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
-        <ChartPanel title="Upload performance" subtitle="Views, retention, and response signals">
-          <PerformanceChart data={analytics.timeline} />
-        </ChartPanel>
-        <ChartPanel title="CTR and engagement" subtitle="Audience response curve">
-          <EngagementChart data={analytics.timeline} />
-        </ChartPanel>
+      <section className="grid gap-4 md:grid-cols-3">
+        <StatCard title="Views" value={numberFmt(stats.total_views)} icon={Eye} tone="cyan" />
+        <StatCard title="Retention" value={`${stats.average_retention || 0}%`} icon={Gauge} tone="emerald" />
+        <StatCard title="Avg watch" value={avgWatch ? `${avgWatch}s` : "No data"} icon={Activity} tone="amber" />
       </section>
-      <section className="grid gap-5 xl:grid-cols-3">
-        <RankedList title="Trending Shorts" items={analytics.top_clips.map((item) => ({ label: item.hook_text, value: `${item.retention_score}%` }))} />
-        <RankedList title="Best Hooks" items={analytics.best_hooks.map((item) => ({ label: item.hook, value: `${item.score}%` }))} />
-        <RankedList title="Top Styles" items={analytics.styles.map((item) => ({ label: item.name, value: `${item.score}%` }))} />
+      <section className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
+        <ChartPanel title="Views and retention" subtitle="Real YouTube data when available">
+          <PerformanceChart data={timeline} />
+        </ChartPanel>
+        <RankedList title="Best upload times" items={(data.uploadIntelligence?.suggested_times || []).map((item) => ({ label: item.time, value: `${item.score}%` }))} />
+      </section>
+      <section className="grid gap-5 xl:grid-cols-2">
+        <RankedList title="Best hooks" items={(analytics.best_hooks || []).map((item) => ({ label: item.hook, value: `${item.score}%` }))} />
+        <RankedList title="Top Shorts" items={(analytics.top_clips || []).map((item) => ({ label: item.hook_text, value: `${item.retention_score}%` }))} />
       </section>
     </div>
   );
@@ -824,7 +971,7 @@ function UploadIntelligencePage({ data }) {
               <div key={`${item.time}-${index}`} className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.04] p-4">
                 <div>
                   <p className="font-black text-white">{item.time}</p>
-                  <p className="text-sm text-slate-400">{item.niche || item.channel || "Network default"}</p>
+                  <p className="text-sm text-slate-400">{item.niche || item.channel || "Studio default"}</p>
                 </div>
                 <MetricRing value={item.score || 0} />
               </div>
@@ -1029,7 +1176,7 @@ function ChannelsPage({ data }) {
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard title="Managed channels" value={network.managed_channels || channels.length} icon={Globe2} tone="cyan" />
         <StatCard title="Active channels" value={network.active_channels || 0} icon={Activity} tone="emerald" />
-        <StatCard title="Network clips" value={network.total_clips || 0} icon={Clapperboard} tone="violet" />
+        <StatCard title="Generated clips" value={network.total_clips || 0} icon={Clapperboard} tone="violet" />
         <StatCard title="Avg posts/day" value={network.avg_upload_frequency || 0} icon={CalendarClock} tone="amber" />
       </section>
       <section className="grid gap-5 xl:grid-cols-[0.8fr_1.2fr]">
@@ -1141,9 +1288,11 @@ function SettingsPage({ settings }) {
 }
 
 function ClipModal({ clip, close }) {
+  const variants = clip.hook_variants || [];
+  const titleVariants = clip.title_variants || [];
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4 backdrop-blur-xl" onClick={close}>
-      <div className="glass-panel w-full max-w-5xl overflow-hidden rounded-3xl" onClick={(event) => event.stopPropagation()}>
+      <div className="glass-panel max-h-[92vh] w-full max-w-5xl overflow-auto rounded-3xl" onClick={(event) => event.stopPropagation()}>
         <div className="grid lg:grid-cols-[0.72fr_1fr]">
           <div className="bg-black">
             {clip.clip_url ? <video src={clip.clip_url} className="max-h-[78vh] w-full object-contain" controls autoPlay /> : <div className="grid aspect-[9/16] place-items-center"><Film /></div>}
@@ -1151,7 +1300,30 @@ function ClipModal({ clip, close }) {
           <div className="p-6">
             <p className="text-sm font-bold uppercase tracking-[0.2em] text-cyan-200">Retention score {clip.retention_score}%</p>
             <h2 className="mt-3 text-3xl font-black text-white">{clip.hook_text}</h2>
+            <p className="mt-2 text-lg font-bold text-slate-200">{clip.title}</p>
+            <p className="mt-1 text-sm text-slate-500">{clip.source_title || `Source video #${clip.video_id}`}</p>
             <p className="mt-3 leading-7 text-slate-300">{clip.reason || clip.description}</p>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <button className="control-button px-3 py-2" onClick={() => regenerateHook(clip.id)} type="button"><Wand2 size={15} /> Regenerate Hook</button>
+              <button className="control-button px-3 py-2" onClick={() => regenerateCaptions(clip.id)} type="button"><Bot size={15} /> Regenerate Captions</button>
+              <button className="primary-button px-3 py-2" onClick={() => uploadPrivate(clip.id)} type="button"><UploadCloud size={15} /> Upload Private</button>
+            </div>
+            {!!variants.length && (
+              <div className="mt-5">
+                <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Hook variants</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {variants.slice(0, 5).map((item) => <span key={item.text} className="rounded-full bg-white/10 px-3 py-1 text-xs font-bold text-slate-200">{item.text}</span>)}
+                </div>
+              </div>
+            )}
+            {!!titleVariants.length && (
+              <div className="mt-5">
+                <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Title variants</p>
+                <div className="mt-2 grid gap-2">
+                  {titleVariants.map((item) => <p key={item} className="rounded-xl bg-black/20 px-3 py-2 text-sm text-slate-200">{item}</p>)}
+                </div>
+              </div>
+            )}
             <div className="mt-6 grid gap-3">
               {Object.entries(clip.insights || {}).map(([key, value]) => (
                 <div key={key}>

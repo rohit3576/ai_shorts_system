@@ -25,14 +25,8 @@ async def _bootstrap(session: AsyncSession) -> dict[str, Any]:
         "clips": await services.clips_payload(session, limit=24),
         "analytics": await services.analytics_payload(session),
         "channels": await services.channels_payload(session),
-        "aiInsights": await services.ai_insights_payload(session),
         "uploadIntelligence": await services.upload_intelligence_payload(session),
-        "revenue": await services.revenue_payload(session),
-        "trends": await services.trend_center_payload(session),
-        "learning": await services.learning_payload(session),
         "uploads": await services.uploads_payload(session),
-        "logs": await services.logs_payload(session),
-        "storage": await services.storage_payload(session),
         "settings": services.settings_payload(),
     }
 
@@ -59,13 +53,44 @@ async def _render_app(
 
 @router.get("/", response_class=HTMLResponse)
 @router.get("/dashboard", response_class=HTMLResponse)
+@router.get("/review", response_class=HTMLResponse)
 async def dashboard(
     request: Request,
     session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
-    """Render the overview dashboard."""
+    """Render the review queue as the creator home screen."""
 
-    return await _render_app(request, session, page="overview", template_name="dashboard.html")
+    return await _render_app(request, session, page="review", template_name="dashboard.html")
+
+
+@router.get("/sources", response_class=HTMLResponse)
+async def sources_page(
+    request: Request,
+    session: AsyncSession = Depends(get_read_session),
+) -> HTMLResponse:
+    """Render source management."""
+
+    return await _render_app(request, session, page="sources", template_name="dashboard.html")
+
+
+@router.get("/generate", response_class=HTMLResponse)
+async def generate_page(
+    request: Request,
+    session: AsyncSession = Depends(get_read_session),
+) -> HTMLResponse:
+    """Render the generation workflow."""
+
+    return await _render_app(request, session, page="generate", template_name="dashboard.html")
+
+
+@router.get("/uploads", response_class=HTMLResponse)
+async def uploads_page(
+    request: Request,
+    session: AsyncSession = Depends(get_read_session),
+) -> HTMLResponse:
+    """Render private and scheduled uploads."""
+
+    return await _render_app(request, session, page="uploads", template_name="dashboard.html")
 
 
 @router.get("/pipeline", response_class=HTMLResponse)
@@ -73,9 +98,9 @@ async def pipeline_page(
     request: Request,
     session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
-    """Render the pipeline monitor."""
+    """Legacy route for the generation workflow."""
 
-    return await _render_app(request, session, page="pipeline", template_name="pipeline.html")
+    return await _render_app(request, session, page="generate", template_name="dashboard.html")
 
 
 @router.get("/clips", response_class=HTMLResponse)
@@ -83,9 +108,9 @@ async def clips_page(
     request: Request,
     session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
-    """Render the Shorts gallery."""
+    """Legacy route for the review queue."""
 
-    return await _render_app(request, session, page="clips", template_name="clips.html")
+    return await _render_app(request, session, page="review", template_name="dashboard.html")
 
 
 @router.get("/analytics", response_class=HTMLResponse)
@@ -103,9 +128,9 @@ async def ai_insights_page(
     request: Request,
     session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
-    """Render AI insights."""
+    """Legacy route folded into the review queue."""
 
-    return await _render_app(request, session, page="ai-insights", template_name="ai_insights.html")
+    return await _render_app(request, session, page="review", template_name="dashboard.html")
 
 
 @router.get("/upload-intelligence", response_class=HTMLResponse)
@@ -113,9 +138,9 @@ async def upload_intelligence_page(
     request: Request,
     session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
-    """Render upload intelligence."""
+    """Legacy route folded into uploads."""
 
-    return await _render_app(request, session, page="upload-intelligence", template_name="upload_intelligence.html")
+    return await _render_app(request, session, page="uploads", template_name="dashboard.html")
 
 
 @router.get("/revenue", response_class=HTMLResponse)
@@ -123,9 +148,9 @@ async def revenue_page(
     request: Request,
     session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
-    """Render revenue estimates."""
+    """Legacy route folded into creator analytics."""
 
-    return await _render_app(request, session, page="revenue", template_name="revenue.html")
+    return await _render_app(request, session, page="analytics", template_name="dashboard.html")
 
 
 @router.get("/trends", response_class=HTMLResponse)
@@ -133,9 +158,9 @@ async def trends_page(
     request: Request,
     session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
-    """Render trend center."""
+    """Legacy route folded into sources."""
 
-    return await _render_app(request, session, page="trends", template_name="trends.html")
+    return await _render_app(request, session, page="sources", template_name="dashboard.html")
 
 
 @router.get("/learning", response_class=HTMLResponse)
@@ -143,9 +168,9 @@ async def learning_page(
     request: Request,
     session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
-    """Render the learning engine."""
+    """Legacy route folded into creator analytics."""
 
-    return await _render_app(request, session, page="learning", template_name="learning.html")
+    return await _render_app(request, session, page="analytics", template_name="dashboard.html")
 
 
 @router.get("/channels", response_class=HTMLResponse)
@@ -153,9 +178,9 @@ async def channels_page(
     request: Request,
     session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
-    """Render channel management."""
+    """Legacy route for sources."""
 
-    return await _render_app(request, session, page="channels", template_name="channels.html")
+    return await _render_app(request, session, page="sources", template_name="dashboard.html")
 
 
 @router.get("/settings", response_class=HTMLResponse)
@@ -163,9 +188,9 @@ async def settings_page(
     request: Request,
     session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
-    """Render settings."""
+    """Legacy route folded into sources."""
 
-    return await _render_app(request, session, page="settings", template_name="settings.html")
+    return await _render_app(request, session, page="sources", template_name="dashboard.html")
 
 
 @router.get("/logs", response_class=HTMLResponse)
@@ -173,9 +198,9 @@ async def logs_page(
     request: Request,
     session: AsyncSession = Depends(get_read_session),
 ) -> HTMLResponse:
-    """Render logs."""
+    """Legacy route folded into generation."""
 
-    return await _render_app(request, session, page="logs", template_name="logs.html")
+    return await _render_app(request, session, page="generate", template_name="dashboard.html")
 
 
 @router.get("/dashboard/api/overview")
