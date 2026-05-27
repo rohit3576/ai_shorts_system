@@ -74,7 +74,7 @@ class JobService:
                 job.started_at = now
                 job.finished_at = None
                 job.error = None
-                job.attempts += 1
+                job.attempts = int(job.attempts or 0) + 1
             await commit_with_retry(session)
 
         for job in jobs:
@@ -92,6 +92,8 @@ class JobService:
                 raise ValueError(f"Job {job_id} not found")
             if job.status not in {"running", "queued", "retry"}:
                 return job
+            if job.status in {"queued", "retry"}:
+                job.attempts = int(job.attempts or 0) + 1
             job.status = "running"
             job.locked_at = datetime.now(timezone.utc)
             job.started_at = job.started_at or datetime.now(timezone.utc)
@@ -108,9 +110,11 @@ class JobService:
                 job.stderr_tail = str(exc)[-4000:]
                 job.finished_at = datetime.now(timezone.utc)
                 job.duration_seconds = round(time.perf_counter() - started, 3)
-                if job.attempts < job.max_attempts and not _is_non_retryable(exc):
+                attempts = int(job.attempts or 0)
+                max_attempts = int(job.max_attempts or settings.job_max_attempts)
+                if attempts < max_attempts and not _is_non_retryable(exc):
                     job.status = "retry"
-                    job.next_run_at = datetime.now(timezone.utc) + timedelta(minutes=min(60, 2**job.attempts))
+                    job.next_run_at = datetime.now(timezone.utc) + timedelta(minutes=min(60, 2**attempts))
                 else:
                     job.status = "failed"
                     job.next_run_at = None
@@ -142,7 +146,9 @@ class JobService:
         )
         count = 0
         for job in result.scalars().all():
-            job.status = "retry" if job.attempts < job.max_attempts else "failed"
+            attempts = int(job.attempts or 0)
+            max_attempts = int(job.max_attempts or settings.job_max_attempts)
+            job.status = "retry" if attempts < max_attempts else "failed"
             job.next_run_at = datetime.now(timezone.utc)
             job.error = job.error or "Recovered stale running job after restart."
             count += 1

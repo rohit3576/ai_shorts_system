@@ -241,6 +241,14 @@ async def dashboard_upload_intelligence(session: AsyncSession = Depends(get_read
     return payload
 
 
+@router.get("/dashboard/api/jobs")
+async def dashboard_jobs(
+    session: AsyncSession = Depends(get_read_session),
+    limit: int = Query(20, ge=1, le=100),
+) -> dict[str, Any]:
+    return await services.jobs_payload(session, limit=limit)
+
+
 @router.get("/dashboard/api/revenue")
 async def dashboard_revenue(session: AsyncSession = Depends(get_read_session)) -> dict[str, Any]:
     payload = await services.revenue_payload(session)

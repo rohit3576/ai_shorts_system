@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from datetime import datetime, timezone
 from typing import Any
 
@@ -78,7 +79,9 @@ class SourceIngestionService:
         try:
             result = await run_command(
                 [
-                    "yt-dlp",
+                    sys.executable,
+                    "-m",
+                    "yt_dlp",
                     "--dump-single-json",
                     "--playlist-end",
                     str(limit_per_source),
@@ -97,7 +100,7 @@ class SourceIngestionService:
             return []
 
         channel = await self._ensure_source_channel(session, source, payload)
-        entries = payload.get("entries") or [payload]
+        entries = list(self._iter_video_entries(payload))
         new_videos: list[Video] = []
         for entry in entries:
             if not entry:
@@ -126,6 +129,23 @@ class SourceIngestionService:
         source.last_checked_at = datetime.now(timezone.utc)
         await session.flush()
         return new_videos
+
+    def _iter_video_entries(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        """Flatten yt-dlp channel tab payloads into concrete videos."""
+
+        found: list[dict[str, Any]] = []
+        for entry in payload.get("entries") or [payload]:
+            if not entry:
+                continue
+            nested = entry.get("entries")
+            if nested:
+                found.extend(self._iter_video_entries({"entries": nested}))
+                continue
+            youtube_id = entry.get("id") or entry.get("display_id")
+            url = entry.get("webpage_url") or entry.get("url")
+            if youtube_id and url and not str(youtube_id).startswith("UC"):
+                found.append(entry)
+        return found
 
     async def _ensure_source_channel(self, session: AsyncSession, source: SourceFeed, payload: dict[str, Any]) -> Channel:
         if source.channel_id:

@@ -113,7 +113,15 @@ class ShortsPipeline:
                     return {"video_id": video.id, "status": "already_completed"}
 
                 async with job_stage(session, job_id, f"detect_clips_{video.id}", stage_order=40):
-                    candidates = await self.detector.detect(video.transcript_path)
+                    try:
+                        candidates = await self.detector.detect(video.transcript_path)
+                    except Exception as exc:
+                        if not settings.allow_heuristic_clip_fallback:
+                            raise
+                        logger.warning("Transcript clip detection failed for video %s; using fallback: %s", video.id, exc)
+                        candidates = []
+                    if not candidates and settings.allow_heuristic_clip_fallback:
+                        candidates = self._gameplay_fallback_candidates(video)
                 candidates = candidates[: settings.max_render_count_per_video]
                 rendered_clip_ids: list[int] = []
                 failed_candidates: list[dict[str, Any]] = []
@@ -272,6 +280,57 @@ class ShortsPipeline:
             if float(segment["end"]) >= start_time and float(segment["start"]) <= end_time:
                 lines.append(segment["text"])
         return " ".join(lines)
+
+    def _gameplay_fallback_candidates(self, video: Video) -> list[ClipCandidate]:
+        """Create reviewable candidates when gameplay has little or no speech."""
+
+        available_seconds = self._available_download_seconds(video)
+        if available_seconds < settings.min_clip_seconds:
+            return []
+
+        clip_length = min(settings.max_clip_seconds, max(settings.min_clip_seconds, 28))
+        clip_length = min(clip_length, available_seconds)
+        max_start = max(0.0, available_seconds - clip_length)
+        preferred_starts = [8.0, available_seconds * 0.34, available_seconds * 0.68]
+        hooks = ["Clean Moment", "Watch This Play", "Perfect Timing"]
+        candidates: list[ClipCandidate] = []
+
+        for index, raw_start in enumerate(preferred_starts):
+            start = max(0.0, min(float(raw_start), max_start))
+            if any(abs(start - item.start_time) < 3.0 for item in candidates):
+                start = max(0.0, min(start + clip_length + 4.0, max_start))
+            if any(abs(start - item.start_time) < 3.0 for item in candidates):
+                continue
+            end = min(available_seconds, start + clip_length)
+            if end - start < settings.min_clip_seconds:
+                continue
+            candidates.append(
+                ClipCandidate(
+                    start_time=round(start, 2),
+                    end_time=round(end, 2),
+                    viral_score=max(settings.viral_score_threshold, 0.74 - index * 0.02),
+                    reason=(
+                        "Gameplay fallback: the transcript had little or no speech, so this "
+                        "sampled a visual moment for quick manual review."
+                    ),
+                    hook_text=hooks[index % len(hooks)],
+                    hook_type="suspense",
+                )
+            )
+
+        return candidates[: settings.max_clips_per_video]
+
+    def _available_download_seconds(self, video: Video) -> float:
+        metadata = video.metadata_json or {}
+        processed_section = metadata.get("processed_section") if isinstance(metadata, dict) else None
+        if isinstance(processed_section, dict):
+            start = float(processed_section.get("start_seconds") or 0)
+            end = float(processed_section.get("end_seconds") or 0)
+            if end > start:
+                return min(end - start, float(settings.max_download_seconds))
+        if video.duration_seconds:
+            return min(float(video.duration_seconds), float(settings.max_download_seconds))
+        return float(settings.max_download_seconds)
 
     async def _store_predicted_negatives(self, session, clip: Clip, intelligence) -> None:
         metadata = clip.metadata_json or {}

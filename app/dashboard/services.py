@@ -26,6 +26,8 @@ from database.models import (
     ChannelProfile,
     Clip,
     ClipIntelligence,
+    JobStage,
+    ProcessingJob,
     SourceFeed,
     Upload,
     Video,
@@ -510,6 +512,31 @@ async def upload_intelligence_payload(session: AsyncSession) -> dict[str, Any]:
     return await upload_intelligence.payload(session)
 
 
+async def jobs_payload(session: AsyncSession, *, limit: int = 20) -> dict[str, Any]:
+    """Return recent local generation jobs with stage-level progress."""
+
+    jobs_result = await session.execute(select(ProcessingJob).order_by(desc(ProcessingJob.created_at)).limit(limit))
+    jobs = list(jobs_result.scalars().all())
+    job_ids = [job.id for job in jobs]
+    stages_by_job: dict[int, list[JobStage]] = {job_id: [] for job_id in job_ids}
+    if job_ids:
+        stages_result = await session.execute(
+            select(JobStage)
+            .where(JobStage.job_id.in_(job_ids))
+            .order_by(asc(JobStage.stage_order), asc(JobStage.created_at))
+        )
+        for stage in stages_result.scalars().all():
+            stages_by_job.setdefault(stage.job_id, []).append(stage)
+
+    items = [_serialize_job(job, stages_by_job.get(job.id, [])) for job in jobs]
+    active_statuses = {"queued", "running", "retry"}
+    return {
+        "items": items,
+        "active_count": sum(1 for item in items if item["status"] in active_statuses),
+        "latest": items[0] if items else None,
+    }
+
+
 async def revenue_payload(session: AsyncSession) -> dict[str, Any]:
     """Return estimated Shorts revenue and forecast."""
 
@@ -543,6 +570,70 @@ async def logs_payload(session: AsyncSession, *, limit: int = 80, level: str | N
     if level:
         rows = [row for row in rows if row["level"] == level]
     return {"items": rows[: max(1, min(limit, 200))]}
+
+
+def _serialize_job(job: ProcessingJob, stages: list[JobStage]) -> dict[str, Any]:
+    return {
+        "id": job.id,
+        "job_type": job.job_type,
+        "label": _job_label(job.job_type),
+        "status": job.status,
+        "attempts": int(job.attempts or 0),
+        "max_attempts": int(job.max_attempts or 0),
+        "payload": job.payload_json or {},
+        "result": job.result_json or {},
+        "error": job.error,
+        "started_at": _iso(job.started_at),
+        "finished_at": _iso(job.finished_at),
+        "duration_seconds": job.duration_seconds,
+        "created_at": _iso(job.created_at),
+        "stages": [_serialize_stage(stage) for stage in stages],
+    }
+
+
+def _serialize_stage(stage: JobStage) -> dict[str, Any]:
+    return {
+        "id": stage.id,
+        "name": stage.name,
+        "label": _stage_label(stage.name),
+        "status": stage.status,
+        "stage_order": stage.stage_order,
+        "attempts": int(stage.attempts or 0),
+        "error": stage.error,
+        "started_at": _iso(stage.started_at),
+        "finished_at": _iso(stage.finished_at),
+        "duration_seconds": stage.duration_seconds,
+    }
+
+
+def _job_label(job_type: str) -> str:
+    return {
+        "process_new_videos": "Generate Shorts batch",
+        "process_video": "Generate one source",
+        "refresh_analytics": "Refresh analytics",
+        "upload": "Upload private Short",
+        "cleanup_storage": "Storage cleanup",
+    }.get(job_type, job_type.replace("_", " ").title())
+
+
+def _stage_label(name: str) -> str:
+    if name == "scan_sources":
+        return "Scanning sources"
+    if name.startswith("download_video"):
+        return "Downloading video"
+    if name.startswith("extract_audio"):
+        return "Extracting audio"
+    if name.startswith("transcribe"):
+        return "Transcribing"
+    if name.startswith("detect_clips"):
+        return "Finding moments"
+    if name.startswith("score_clip"):
+        return "Scoring hooks"
+    if name.startswith("subtitles_clip"):
+        return "Building captions"
+    if name.startswith("render_clip"):
+        return "Rendering Short"
+    return name.replace("_", " ").title()
 
 
 async def storage_payload(session: AsyncSession | None = None) -> dict[str, Any]:

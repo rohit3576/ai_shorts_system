@@ -97,11 +97,12 @@ function useDashboardData(page) {
   const [learning, setLearning] = useState(initialPayload.learning || null);
   const [uploads, setUploads] = useState(initialPayload.uploads || null);
   const [logs, setLogs] = useState(initialPayload.logs || null);
+  const [jobs, setJobs] = useState(initialPayload.jobs || null);
   const [settings, setSettings] = useState(initialPayload.settings || null);
   const [loading, setLoading] = useState(false);
 
-  async function load(target = page) {
-    setLoading(true);
+  async function load(target = page, options = {}) {
+    if (!options.silent) setLoading(true);
     try {
       const requests = [fetch("/dashboard/api/overview").then((r) => r.json())];
       if (["review", "generate"].includes(target)) {
@@ -114,13 +115,13 @@ function useDashboardData(page) {
       } else {
         requests.push(Promise.resolve(analytics));
       }
-      if (target === "sources") {
+      if (["sources", "generate"].includes(target)) {
         requests.push(fetch("/dashboard/api/channels").then((r) => r.json()));
       } else {
         requests.push(Promise.resolve(channels));
       }
       requests.push(Promise.resolve(aiInsights));
-      if (["uploads", "analytics"].includes(target)) {
+      if (["generate", "uploads", "analytics"].includes(target)) {
         requests.push(fetch("/dashboard/api/upload-intelligence").then((r) => r.json()));
       } else {
         requests.push(Promise.resolve(uploadIntelligence));
@@ -133,7 +134,13 @@ function useDashboardData(page) {
       } else {
         requests.push(Promise.resolve(uploads));
       }
-      requests.push(Promise.resolve(logs));
+      if (target === "generate") {
+        requests.push(fetch("/dashboard/api/logs").then((r) => r.json()));
+        requests.push(fetch("/dashboard/api/jobs").then((r) => r.json()));
+      } else {
+        requests.push(Promise.resolve(logs));
+        requests.push(Promise.resolve(jobs));
+      }
       requests.push(Promise.resolve(settings));
 
       const [
@@ -148,6 +155,7 @@ function useDashboardData(page) {
         nextLearning,
         nextUploads,
         nextLogs,
+        nextJobs,
         nextSettings,
       ] = await Promise.all(requests);
       setOverview(nextOverview);
@@ -161,9 +169,10 @@ function useDashboardData(page) {
       if (nextLearning) setLearning(nextLearning);
       if (nextUploads) setUploads(nextUploads);
       if (nextLogs) setLogs(nextLogs);
+      if (nextJobs) setJobs(nextJobs);
       if (nextSettings) setSettings(nextSettings);
     } finally {
-      setLoading(false);
+      if (!options.silent) setLoading(false);
     }
   }
 
@@ -174,11 +183,8 @@ function useDashboardData(page) {
   useEffect(() => {
     if (page !== "generate") return undefined;
     const timer = window.setInterval(() => {
-      fetch("/dashboard/api/logs")
-        .then((r) => r.json())
-        .then(setLogs)
-        .catch(() => {});
-    }, 5000);
+      load("generate", { silent: true });
+    }, 4000);
     return () => window.clearInterval(timer);
   }, [page]);
 
@@ -194,6 +200,7 @@ function useDashboardData(page) {
     learning,
     uploads,
     logs,
+    jobs,
     settings,
     loading,
     reload: load,
@@ -625,7 +632,7 @@ function ReviewQueuePage({ data, onPreview }) {
       </section>
       {visible.length ? (
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {visible.map((clip) => <ClipCard key={clip.id} clip={clip} onPreview={onPreview} />)}
+          {visible.map((clip) => <ClipCard key={clip.id} clip={clip} onPreview={onPreview} uploadEnabled={data.settings?.youtube_upload_enabled} />)}
         </section>
       ) : (
         <EmptyState icon={Clapperboard} title="No Shorts match this view" text="Try another filter or generate a new batch." />
@@ -634,7 +641,7 @@ function ReviewQueuePage({ data, onPreview }) {
   );
 }
 
-function ClipCard({ clip, onPreview, compact = false }) {
+function ClipCard({ clip, onPreview, compact = false, uploadEnabled = false }) {
   const canReview = Number.isFinite(Number(clip.id));
   const readiness = clip.upload_readiness || { label: "Needs review", status: "review" };
   const rights = clip.rights_status || { label: "Needs rights check", status: "needs_review" };
@@ -674,7 +681,11 @@ function ClipCard({ clip, onPreview, compact = false }) {
           <button className="control-button shrink-0 px-3 py-2" disabled={!canReview} onClick={() => regenerateHook(clip.id)} type="button"><Wand2 size={15} /> Regenerate Hook</button>
           <button className="control-button shrink-0 px-3 py-2" disabled={!canReview} onClick={() => regenerateCaptions(clip.id)} type="button"><Bot size={15} /> Regenerate Captions</button>
           <button className="control-button shrink-0 px-3 py-2" disabled={!canReview} onClick={() => reviewClip(clip.id, "rerender")} type="button"><RefreshCw size={15} /> Re-render</button>
-          <button className="primary-button shrink-0 px-3 py-2" disabled={!canReview} onClick={() => uploadPrivate(clip.id)} type="button"><UploadCloud size={15} /> Upload Private</button>
+          {uploadEnabled ? (
+            <button className="primary-button shrink-0 px-3 py-2" disabled={!canReview} onClick={() => uploadPrivate(clip.id)} type="button"><UploadCloud size={15} /> Upload Private</button>
+          ) : (
+            clip.clip_url && <a className="primary-button shrink-0 px-3 py-2" href={clip.clip_url} download><UploadCloud size={15} /> Manual Upload</a>
+          )}
           {clip.clip_url && <a className="control-button shrink-0 px-3 py-2" href={clip.clip_url} download><Download size={15} /> Download</a>}
         </div>
       </div>
@@ -810,33 +821,321 @@ function addSource(event) {
 }
 
 function GeneratePage({ data, onPreview }) {
+  const [activeAction, setActiveAction] = useState(null);
+  const [notice, setNotice] = useState(null);
   const recentVideos = data.overview?.videos || [];
   const recentClips = data.clips?.items || [];
+  const jobs = data.jobs?.items || [];
+  const activeJob = jobs.find((job) => ["queued", "running", "retry"].includes(job.status));
+  const latestJob = activeJob || jobs[0];
+  const sources = data.channels?.sources || [];
+  const sourceFocus = useMemo(() => buildSourceFocus(sources, recentVideos), [sources, recentVideos]);
+  const weeklyPlan = useMemo(
+    () => buildWeeklyPlan(recentClips, data.uploadIntelligence?.suggested_times || []),
+    [recentClips, data.uploadIntelligence]
+  );
+  const readyClips = recentClips.filter((clip) => clip.clip_url && clip.status !== "rejected");
+
+  async function runAction(action) {
+    setActiveAction(action);
+    setNotice({ tone: "info", text: action === "scan" ? "Scanning saved sources..." : "Generation queued. Local worker is starting..." });
+    try {
+      if (action === "scan") {
+        const response = await fetch("/api/sources/scan", { method: "POST" });
+        if (!response.ok) throw new Error("Scan failed.");
+        setNotice({ tone: "success", text: "Source scan finished. New videos are ready for generation." });
+        await data.reload("generate", { silent: true });
+        setActiveAction(null);
+        return;
+      }
+
+      if (action === "generate") {
+        const response = await fetch("/api/process", { method: "POST" });
+        if (!response.ok) throw new Error("Could not queue generation.");
+        setNotice({ tone: "info", text: "Batch queued. Watch the stages below while it downloads, captions, and renders." });
+      }
+
+      const worker = fetch("/api/jobs/run-next", { method: "POST" });
+      worker
+        .then((response) => {
+          if (!response.ok) throw new Error("Worker failed.");
+          setNotice({ tone: "success", text: "Local worker finished. Review Queue has the newest results." });
+        })
+        .catch((error) => setNotice({ tone: "error", text: error.message || "Generation failed. Check the latest job details." }))
+        .finally(() => {
+          setActiveAction(null);
+          data.reload("generate", { silent: true });
+        });
+      await data.reload("generate", { silent: true });
+    } catch (error) {
+      setNotice({ tone: "error", text: error.message || "Action failed." });
+      setActiveAction(null);
+    }
+  }
+
   return (
     <div className="grid gap-5">
-      <section className="grid gap-4 md:grid-cols-3">
-        <button className="primary-button min-h-24 justify-start px-5 text-left" type="button" onClick={() => fetch("/api/sources/scan", { method: "POST" }).then(() => window.location.reload())}>
-          <Search size={20} /> Scan sources
-        </button>
-        <button className="primary-button min-h-24 justify-start px-5 text-left" type="button" onClick={() => fetch("/api/process", { method: "POST" }).then(() => window.location.reload())}>
-          <Zap size={20} /> Generate candidate Shorts
-        </button>
-        <button className="control-button min-h-24 justify-start px-5 text-left" type="button" onClick={() => fetch("/api/jobs/run-next", { method: "POST" }).then(() => window.location.reload())}>
-          <Play size={20} /> Run next local job
-        </button>
+      <section className="soft-card overflow-hidden">
+        <div className="grid gap-5 p-5 lg:grid-cols-[1.15fr_0.85fr] lg:items-center">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-cyan-200">Weekly Shorts batch</p>
+            <h2 className="mt-2 text-3xl font-black text-white">Generate edited Shorts for the next 7 days</h2>
+            <div className="mt-5 flex flex-wrap gap-3">
+              <button className="primary-button" type="button" disabled={!!activeAction} onClick={() => runAction("generate")}>
+                {activeAction === "generate" ? <Loader2 className="animate-spin" size={18} /> : <Zap size={18} />}
+                Generate batch
+              </button>
+              <button className="control-button" type="button" disabled={!!activeAction} onClick={() => runAction("scan")}>
+                {activeAction === "scan" ? <Loader2 className="animate-spin" size={18} /> : <Search size={18} />}
+                Scan sources
+              </button>
+              <button className="control-button" type="button" disabled={!!activeAction} onClick={() => runAction("run")}>
+                {activeAction === "run" ? <Loader2 className="animate-spin" size={18} /> : <Play size={18} />}
+                Run worker
+              </button>
+            </div>
+            {notice && <Notice text={notice.text} tone={notice.tone} />}
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
+            <MiniMetric label="Ready Shorts" value={`${readyClips.length}/7`} icon={CheckCircle2} />
+            <MiniMetric label="Active Jobs" value={data.jobs?.active_count || 0} icon={Loader2} active={!!activeJob} />
+            <MiniMetric label="Latest Job" value={latestJob ? latestJob.status : "idle"} icon={Activity} />
+          </div>
+        </div>
       </section>
+
+      <section className="grid gap-5 xl:grid-cols-[0.8fr_1.2fr]">
+        <SourceFocusPanel sources={sourceFocus} />
+        <GenerationProgress job={latestJob} />
+      </section>
+
+      <WeeklyPlan plan={weeklyPlan} onPreview={onPreview} />
+
       <section className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
         <RankedList title="Recent source videos" items={recentVideos.map((video) => ({ label: video.title, value: video.status }))} />
         <section className="soft-card p-5">
-          <h2 className="text-lg font-black text-white">Latest candidates</h2>
+          <h2 className="text-lg font-black text-white">Latest rendered candidates</h2>
           <div className="mt-4 grid gap-4 md:grid-cols-2">
-            {recentClips.slice(0, 4).map((clip) => <ClipCard key={clip.id} clip={clip} onPreview={onPreview} compact />)}
+            {recentClips.slice(0, 4).map((clip) => <ClipCard key={clip.id} clip={clip} onPreview={onPreview} compact uploadEnabled={data.settings?.youtube_upload_enabled} />)}
             {!recentClips.length && <EmptyState icon={Clapperboard} title="No candidates yet" text="Run generation after adding a source." />}
           </div>
         </section>
       </section>
     </div>
   );
+}
+
+function MiniMetric({ label, value, icon: Icon, active = false }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">{label}</p>
+        <Icon className={active ? "animate-spin text-cyan-200" : "text-cyan-200"} size={17} />
+      </div>
+      <p className="mt-2 text-2xl font-black capitalize text-white">{value}</p>
+    </div>
+  );
+}
+
+const pipelineSteps = [
+  { label: "Scan", icon: Search, match: (name) => name === "scan_sources" },
+  { label: "Download", icon: Download, match: (name) => name.startsWith("download_video") },
+  { label: "Audio", icon: Activity, match: (name) => name.startsWith("extract_audio") },
+  { label: "Whisper", icon: Radio, match: (name) => name.startsWith("transcribe") },
+  { label: "Moments", icon: Sparkles, match: (name) => name.startsWith("detect_clips") },
+  { label: "Captions", icon: Clapperboard, match: (name) => name.startsWith("subtitles_clip") },
+  { label: "Render", icon: Film, match: (name) => name.startsWith("render_clip") },
+];
+
+function SourceFocusPanel({ sources }) {
+  return (
+    <section className="soft-card p-5">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <h2 className="text-lg font-black text-white">Source focus</h2>
+        <Globe2 size={20} className="text-cyan-200" />
+      </div>
+      <div className="grid gap-3">
+        {sources.length ? sources.map((source) => (
+          <div key={source.id} className="rounded-2xl border border-white/10 bg-black/20 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate font-black text-white">{source.label}</p>
+                <p className="mt-1 truncate text-xs text-slate-500">{source.url}</p>
+              </div>
+              <span className={cx("rounded-full px-3 py-1 text-xs font-black", source.tone)}>
+                {source.niche}
+              </span>
+            </div>
+          </div>
+        )) : <EmptyState icon={Globe2} title="No sources yet" text="Add gaming, fashion, or topic sources first." />}
+      </div>
+    </section>
+  );
+}
+
+function GenerationProgress({ job }) {
+  const status = job?.status || "idle";
+  return (
+    <section className="soft-card p-5">
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-black text-white">Generation progress</h2>
+          <p className="mt-1 text-sm text-slate-400">{job ? `${job.label} #${job.id}` : "No local batch is running."}</p>
+        </div>
+        <span className={cx("rounded-full px-3 py-1 text-xs font-black capitalize", jobStatusClass(status))}>{status}</span>
+      </div>
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {pipelineSteps.map((step) => {
+          const stepStatus = progressStepStatus(job, step);
+          const Icon = step.icon;
+          return (
+            <div key={step.label} className={cx("rounded-2xl border p-4", progressStepClass(stepStatus))}>
+              <div className="flex items-center justify-between gap-3">
+                <Icon size={18} />
+                {stepStatus === "running" ? <Loader2 className="animate-spin" size={16} /> : stepStatus === "completed" ? <CheckCircle2 size={16} /> : <span className="h-2 w-2 rounded-full bg-current opacity-60" />}
+              </div>
+              <p className="mt-3 font-black text-white">{step.label}</p>
+              <p className="mt-1 text-xs font-semibold capitalize text-slate-400">{stepStatus}</p>
+            </div>
+          );
+        })}
+      </div>
+      {job?.error && <Notice text={job.error} tone="error" />}
+      {!!job?.stages?.length && (
+        <div className="mt-5 grid gap-2">
+          {job.stages.slice(-5).map((stage) => (
+            <div key={stage.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-black/20 px-3 py-2 text-sm">
+              <span className="font-semibold text-slate-200">{stage.label}</span>
+              <span className={cx("rounded-full px-2 py-1 text-xs font-black capitalize", jobStatusClass(stage.status))}>{stage.status}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function WeeklyPlan({ plan, onPreview }) {
+  return (
+    <section className="soft-card p-5">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-lg font-black text-white">7-day schedule draft</h2>
+        <CalendarClock size={20} className="text-cyan-200" />
+      </div>
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
+        {plan.map((slot) => (
+          <article key={slot.key} className="flex min-h-52 flex-col justify-between rounded-2xl border border-white/10 bg-black/20 p-4">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.14em] text-cyan-200">{slot.dayLabel}</p>
+              <p className="mt-1 text-sm font-bold text-slate-400">{slot.dateLabel} at {slot.time}</p>
+              {slot.clip ? (
+                <>
+                  <h3 className="mt-4 line-clamp-2 font-black text-white">{slot.clip.hook_text}</h3>
+                  <p className="mt-2 line-clamp-2 text-xs font-semibold text-slate-300">{slot.clip.title}</p>
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                    <span className="rounded-full bg-white/10 px-2 py-1 font-bold text-white">{slot.clip.duration}s</span>
+                    <span className="rounded-full bg-white/10 px-2 py-1 font-bold text-white">{slot.clip.retention_score}%</span>
+                    <span className={cx("rounded-full px-2 py-1 font-bold", slot.clip.subtitle_url ? "bg-emerald-300/15 text-emerald-200" : "bg-amber-300/15 text-amber-100")}>
+                      {slot.clip.subtitle_url ? "Captions ready" : "Needs captions"}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <p className="mt-5 text-sm font-semibold text-slate-400">Need one more generated Short for this slot.</p>
+              )}
+            </div>
+            {slot.clip ? (
+              <button className="control-button mt-4 w-full px-3 py-2" type="button" onClick={() => onPreview(slot.clip)}>
+                <Play size={15} /> Preview
+              </button>
+            ) : (
+              <span className="mt-4 rounded-xl bg-white/[0.05] px-3 py-2 text-center text-xs font-bold text-slate-500">Empty slot</span>
+            )}
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function progressStepStatus(job, step) {
+  if (!job) return "waiting";
+  const stages = job.stages || [];
+  const matches = stages.filter((stage) => step.match(stage.name));
+  if (matches.some((stage) => stage.status === "failed")) return "failed";
+  if (matches.some((stage) => stage.status === "running")) return "running";
+  if (matches.some((stage) => stage.status === "completed")) return "completed";
+  if (job.status === "queued" || job.status === "retry") return "queued";
+  return "waiting";
+}
+
+function progressStepClass(status) {
+  return {
+    completed: "border-emerald-300/20 bg-emerald-300/10 text-emerald-200",
+    running: "border-cyan-300/30 bg-cyan-300/10 text-cyan-100",
+    failed: "border-rose-300/30 bg-rose-300/10 text-rose-200",
+    queued: "border-amber-300/20 bg-amber-300/10 text-amber-100",
+    waiting: "border-white/10 bg-white/[0.035] text-slate-500",
+  }[status] || "border-white/10 bg-white/[0.035] text-slate-500";
+}
+
+function jobStatusClass(status) {
+  return {
+    completed: "bg-emerald-300/15 text-emerald-200",
+    running: "bg-cyan-300/15 text-cyan-100",
+    queued: "bg-cyan-300/15 text-cyan-100",
+    retry: "bg-amber-300/15 text-amber-100",
+    failed: "bg-rose-300/15 text-rose-200",
+    idle: "bg-white/10 text-slate-300",
+  }[status] || "bg-white/10 text-slate-300";
+}
+
+function buildSourceFocus(sources, videos) {
+  const rows = sources.length ? sources : videos.slice(0, 3).map((video) => ({ id: `video-${video.id}`, label: video.title, url: video.url, source_type: "video" }));
+  return rows.map((source) => {
+    const text = `${source.label || ""} ${source.url || ""}`.toLowerCase();
+    const niche = detectNiche(text);
+    return {
+      id: source.id,
+      label: source.label || source.url || "Untitled source",
+      url: source.url || "",
+      niche,
+      tone: niche === "Gaming" ? "bg-cyan-300/15 text-cyan-100" : niche === "Fashion" ? "bg-rose-300/15 text-rose-100" : "bg-violet-300/15 text-violet-100",
+    };
+  });
+}
+
+function detectNiche(text) {
+  if (/(fashion|style|outfit|makeup|beauty|dress|lookbook)/i.test(text)) return "Fashion";
+  if (/(game|gaming|gohan|mortal|forza|batman|ps5|xbox|walkthrough)/i.test(text)) return "Gaming";
+  if (/(ai|coding|automation|productivity|tool)/i.test(text)) return "AI";
+  return "General";
+}
+
+function buildWeeklyPlan(clips, suggestedTimes) {
+  const usable = [...clips]
+    .filter((clip) => clip.clip_url && clip.status !== "rejected")
+    .sort((a, b) => Number(b.retention_score || 0) - Number(a.retention_score || 0));
+  const defaultTimes = [
+    { time: "12:30", score: 81 },
+    { time: "18:30", score: 88 },
+    { time: "22:00", score: 79 },
+  ];
+  const times = suggestedTimes.length ? suggestedTimes : defaultTimes;
+  const today = new Date();
+  return Array.from({ length: 7 }).map((_, index) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() + index);
+    const time = times[index % times.length] || defaultTimes[index % defaultTimes.length];
+    return {
+      key: `slot-${index}`,
+      dayLabel: index === 0 ? "Today" : date.toLocaleDateString([], { weekday: "short" }),
+      dateLabel: date.toLocaleDateString([], { month: "short", day: "numeric" }),
+      time: time.time || "18:30",
+      score: time.score || 0,
+      clip: usable[index] || null,
+    };
+  });
 }
 
 function UploadsPage({ data }) {
@@ -857,7 +1156,7 @@ function UploadsPage({ data }) {
                 <span className="rounded-full bg-cyan-300/15 px-3 py-1 text-xs font-black text-cyan-100">{upload.scheduled_for ? formatDateTime(upload.scheduled_for) : "private now"}</span>
               </div>
             </div>
-          )) : <EmptyState icon={UploadCloud} title="No uploads queued" text="Approve a candidate, then use Upload Private from the review queue." />}
+          )) : <EmptyState icon={UploadCloud} title="No uploads queued" text="Google upload is optional. Download an approved MP4 and upload it manually in YouTube Studio." />}
         </div>
       </section>
       <RankedList title="Useful upload windows" items={suggestedTimes.map((item) => ({ label: item.time, value: `${item.score}%` }))} />
@@ -1290,6 +1589,7 @@ function SettingsPage({ settings }) {
 function ClipModal({ clip, close }) {
   const variants = clip.hook_variants || [];
   const titleVariants = clip.title_variants || [];
+  const uploadEnabled = Boolean(initialPayload.settings?.youtube_upload_enabled);
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4 backdrop-blur-xl" onClick={close}>
       <div className="glass-panel max-h-[92vh] w-full max-w-5xl overflow-auto rounded-3xl" onClick={(event) => event.stopPropagation()}>
@@ -1306,7 +1606,11 @@ function ClipModal({ clip, close }) {
             <div className="mt-5 flex flex-wrap gap-2">
               <button className="control-button px-3 py-2" onClick={() => regenerateHook(clip.id)} type="button"><Wand2 size={15} /> Regenerate Hook</button>
               <button className="control-button px-3 py-2" onClick={() => regenerateCaptions(clip.id)} type="button"><Bot size={15} /> Regenerate Captions</button>
-              <button className="primary-button px-3 py-2" onClick={() => uploadPrivate(clip.id)} type="button"><UploadCloud size={15} /> Upload Private</button>
+              {uploadEnabled ? (
+                <button className="primary-button px-3 py-2" onClick={() => uploadPrivate(clip.id)} type="button"><UploadCloud size={15} /> Upload Private</button>
+              ) : (
+                clip.clip_url && <a className="primary-button px-3 py-2" href={clip.clip_url} download><UploadCloud size={15} /> Manual Upload</a>
+              )}
             </div>
             {!!variants.length && (
               <div className="mt-5">
@@ -1362,9 +1666,15 @@ function EmptyState({ icon: Icon, title, text }) {
   );
 }
 
-function Notice({ text }) {
+function Notice({ text, tone = "warning" }) {
+  const toneClass = {
+    success: "border-emerald-300/20 bg-emerald-300/10 text-emerald-100",
+    error: "border-rose-300/20 bg-rose-300/10 text-rose-100",
+    info: "border-cyan-300/20 bg-cyan-300/10 text-cyan-100",
+    warning: "border-amber-300/20 bg-amber-300/10 text-amber-100",
+  }[tone] || "border-amber-300/20 bg-amber-300/10 text-amber-100";
   return (
-    <div className="rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm font-semibold text-amber-100">
+    <div className={cx("mt-4 rounded-2xl border px-4 py-3 text-sm font-semibold", toneClass)}>
       {text}
     </div>
   );

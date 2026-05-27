@@ -6,6 +6,7 @@ import calendar
 import json
 import logging
 import re
+import sys
 from datetime import datetime, timezone
 from typing import Any
 
@@ -170,7 +171,9 @@ class YouTubeScraper:
         try:
             result = await run_command(
                 [
-                    "yt-dlp",
+                    sys.executable,
+                    "-m",
+                    "yt_dlp",
                     "--dump-single-json",
                     "--playlist-end",
                     "1",

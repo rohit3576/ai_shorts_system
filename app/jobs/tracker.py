@@ -44,7 +44,7 @@ async def start_stage(session: AsyncSession, job_id: int, name: str, *, stage_or
         stage = JobStage(job_id=job_id, name=name, stage_order=stage_order)
         session.add(stage)
     stage.status = "running"
-    stage.attempts += 1
+    stage.attempts = int(stage.attempts or 0) + 1
     stage.started_at = datetime.now(timezone.utc)
     stage.finished_at = None
     stage.error = None

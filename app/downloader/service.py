@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+import sys
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,7 +31,9 @@ class VideoDownloader:
         )
         output_template = settings.videos_dir / f"{video.youtube_video_id}.%(ext)s"
         command = [
-            "yt-dlp",
+            sys.executable,
+            "-m",
+            "yt_dlp",
             "--no-playlist",
             "--download-sections",
             f"*{settings.processing_start_seconds}-{int(section_end)}",
@@ -68,7 +71,7 @@ class VideoDownloader:
         """Fetch yt-dlp metadata without downloading media."""
 
         result = await run_command(
-            ["yt-dlp", "--dump-json", "--no-playlist", video_url],
+            [sys.executable, "-m", "yt_dlp", "--dump-json", "--no-playlist", video_url],
             timeout_seconds=settings.request_timeout_seconds * 2,
         )
         return json.loads(result.stdout)
